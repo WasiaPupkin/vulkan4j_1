@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>club.doki7</groupId>
+    <artifactId>root</artifactId>
+    <version>${revision}</version>
+    <packaging>pom</packaging>
+
+    <name>root</name>
+
+    <properties>
+        <revision>0.1.1</revision>
+        <maven.compiler.release>22</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <modules>
+        <module>codegen-v2</module>
+
+        <module>ffm-plus</module>
+
+        <module>vulkan</module>
+        <module>gles2</module>
+        <module>vma</module>
+        <module>stb</module>
+        <module>openal</module>
+        <module>glfw</module>
+        <module>tutorial</module>
+        <module>opengl</module>
+        <module>example</module>
+        <module>shaderc</module>
+        <module>webgpu</module>
+
+        <!-- experimental -->
+        <module>sdl3</module>
+        <module>openxr</module>
+        <module>opencl</module>
+    </modules>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-site-plugin</artifactId>
+                <version>3.21.0</version>
+            </plugin>
+        </plugins>
+    </build>
+
+    <reporting>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-project-info-reports-plugin</artifactId>
+                <version>3.9.0</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.11.2</version>
+                <configuration>
+                    <doclint>none</doclint>
+                    <bottom><![CDATA[Copyright &copy; ${project.inceptionYear}-{currentYear} ${project.organization.name}. Licensed under the BSD 3-Clause License.]]></bottom>
+                </configuration>
+                <reportSets>
+                    <reportSet>
+                        <id>aggregate</id>
+                        <inherited>false</inherited>
+                        <reports>
+                            <report>aggregate</report>
+                        </reports>
+                        <configuration>
+                            <skippedModules>codegen-v2,tutorial,example</skippedModules>
+                            <windowtitle>vulkan4j</windowtitle>
+                            <doctitle><![CDATA[<code>vulkan4j</code>: CG library bindings implemented with FFM APIs]]></doctitle>
+                            <doclint>none</doclint>
+                            <additionalOptions>
+                                <additionalOption>--add-stylesheet</additionalOption>
+                                <additionalOption>${project.basedir}/../misc/github-colorblind.css</additionalOption>
+                                <additionalOption>-overview</additionalOption>
+                                <additionalOption>${project.basedir}/../misc/overview.html</additionalOption>
+                                <additionalOption>--allow-script-in-comments</additionalOption>
+                            </additionalOptions>
+                        </configuration>
+                    </reportSet>
+                    <reportSet>
+                        <id>default</id>
+                        <reports>
+                            <report>javadoc</report>
+                        </reports>
+                        <configuration>
+                            <doclint>none</doclint>
+                        </configuration>
+                    </reportSet>
+                </reportSets>
+            </plugin>
+        </plugins>
+    </reporting>
+</project>

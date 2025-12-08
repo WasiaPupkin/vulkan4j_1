@@ -1,0 +1,35 @@
+#version 460 core
+#extension GL_EXT_ray_tracing : enable
+
+layout(location = 0) rayPayloadEXT vec3 payload;
+
+layout(binding = 0, set = 0, rgba8) uniform image2D resultImage;
+layout(binding = 1, set = 0) uniform accelerationStructureEXT tlas;
+
+void main() {
+    vec2 pixelCoord = vec2(gl_LaunchIDEXT.xy);
+
+    // ALWAYS turn the whole screen red for verification
+    payload = vec3(1.0, 0.0, 0.0);
+
+    // Note: The flag you originally asked about is KHR specific,
+    // the EXT flags were defined slightly differently. We will use a standard flag here.
+    // If you absolutely need gl_RayFlagsSkipProceduralPrimitives, you are stuck with KHR.
+    // For EXT we use a standard '0' for no flags.
+
+    traceRayEXT(
+        tlas,
+        0,       // Ray flags (Using 0 here as standard flags)
+        0xFF,    // Cull mask
+        0,       // Raygen SBT record offset
+        1,       // SBT record stride
+        0,       // Miss SBT index
+        vec3(0.0, 0.0, 2.0),  // ray origin (camera position)
+        0.001,   // tmin
+        vec3(0.0, 0.0, -1.0), // ray direction (toward origin)
+        1000.0,  // tmax
+        0        // payload location
+    );
+
+    imageStore(resultImage, ivec2(pixelCoord), vec4(payload, 1.0));
+}

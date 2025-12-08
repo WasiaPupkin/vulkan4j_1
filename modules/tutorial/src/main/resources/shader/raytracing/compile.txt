@@ -1,0 +1,6 @@
+glslangValidator.exe -V --target-env vulkan1.2 ray.rgen -o ray.rgen.spv
+glslangValidator.exe -V --target-env vulkan1.2 ray.rchit -o ray.rchit.spv
+glslangValidator.exe -V --target-env vulkan1.2 ray.rmiss -o ray.rmiss.spv
+
+--google's one
+glslangValidator.exe -V -S rgen --target-env spirv1.4 ray.rgen -o ray.rgen.spv

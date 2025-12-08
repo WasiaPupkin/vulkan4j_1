@@ -1,0 +1,59 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+struct RayPayload {
+    vec3 color;
+};
+
+layout(location = 0) rayPayloadEXT RayPayload payload;
+layout(binding = 0, set = 0, rgba8) uniform image2D resultImage;
+layout(binding = 1, set = 0) uniform accelerationStructureEXT tlas;
+
+layout(push_constant) uniform Constants {
+    mat4 inverseProjection;
+    mat4 inverseView;
+} constants;
+
+void main() {
+    // Force a yellow dot at center for verification
+    ivec2 center = ivec2(gl_LaunchSizeEXT.xy / 2);
+    if (gl_LaunchIDEXT.x == center.x && gl_LaunchIDEXT.y == center.y) {
+        imageStore(resultImage, ivec2(gl_LaunchIDEXT.xy), vec4(1.0, 1.0, 0.0, 1.0));
+        return;
+    }
+
+    // Screen space coordinates with Y flip
+    vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+    vec2 uv = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
+
+    // Convert to NDC with Y flip
+    vec2 ndc = uv * 2.0 - 1.0;
+    ndc.y = -ndc.y;
+
+    // Simple ray generation that works on AMD
+    vec3 rayOrigin = vec3(0.0, 0.0, 5.0); // Fixed camera position
+
+    // Calculate ray direction using normalized device coordinates
+    vec3 rayDirection = normalize(vec3(ndc.x, ndc.y, -1.0));
+
+    // Rotate ray direction into world space using inverse view matrix
+    rayDirection = mat3(constants.inverseView) * rayDirection;
+
+    payload.color = vec3(0.1, 0.1, 0.9); // Blue for misses
+
+    traceRayEXT(
+        tlas,
+        gl_RayFlagsNoneEXT,
+        0xFF,
+        0,     // Ray type
+        0,     // Miss index
+        0,     // Hit group index
+        rayOrigin,
+        0.01,  // tMin
+        rayDirection,
+        1000.0, // tMax
+        0      // Payload
+    );
+
+    imageStore(resultImage, ivec2(gl_LaunchIDEXT.xy), vec4(payload.color, 1.0));
+}
