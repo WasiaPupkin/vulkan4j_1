@@ -52,6 +52,7 @@ public class Application {
     private static final BytePtr WINDOW_TITLE = BytePtr.allocateString(Arena.global(), "Ray Tracing Demo");
     private static final boolean ENABLE_VALIDATION_LAYERS = System.getProperty("validation") != null;
     private static final String VALIDATION_LAYER_NAME = "VK_LAYER_KHRONOS_validation";
+
     // Ray tracing properties
     private int handleSize;
     private int handleAlignment;
@@ -60,6 +61,7 @@ public class Application {
     private long raygenAddress;
     private long missAddress;
     private long hitAddress;
+
     // Core
     private GLFWwindow window;
     private VkStaticCommands staticCommands;
@@ -73,22 +75,26 @@ public class Application {
     private VkDeviceCommands deviceCommands;
     private VkQueue graphicsQueue;
     private VkQueue presentQueue;
+
     // VMA
     private VmaAllocator vmaAllocator;
+
     // Swapchain
     private VkSwapchainKHR swapChain;
     private VkImage.Ptr swapChainImages;
     private @EnumType(VkFormat.class) int swapChainImageFormat;
     private VkExtent2D swapChainExtent;
     private VkImageView.Ptr swapChainImageViews;
+
     // Ray tracing resources
     private VkBuffer vertexBuffer;
-    private VmaAllocation vertexBufferAllocation;
-    // Added fields for BLAS/TLAS buffers and allocations
+    private VkDeviceMemory vertexBufferMemory;
+    private VkBuffer indexBuffer;
+    private VkDeviceMemory indexBufferMemory;
     private VkBuffer blasBuffer;
-    private VmaAllocation blasAllocation;
+    private VkDeviceMemory blasBufferMemory;
     private VkBuffer tlasBuffer;
-    private VmaAllocation tlasAllocation;
+    private VkDeviceMemory tlasBufferMemory;
     private VkAccelerationStructureKHR blas;
     private VkAccelerationStructureKHR tlas;
     private VkImage outputImage;
@@ -100,8 +106,9 @@ public class Application {
     private VkDescriptorPool descriptorPool;
     private VkDescriptorSet descriptorSet;
     private VkBuffer sbtBuffer;
-    private VmaAllocation sbtAllocation;
+    private VkDeviceMemory sbtBufferMemory;
     private long sbtDeviceAddress;
+
     // Sync
     private VkSemaphore[] imageAvailableSemaphores;
     private VkSemaphore[] renderFinishedSemaphores;
@@ -113,9 +120,11 @@ public class Application {
     private int currentFrame = 0;
     private boolean framebufferResized = false;
     private boolean needsSwapchainRecreation = false;
+
     // Camera parameters
     private final Vector3f cameraPosition = new Vector3f(0.0f, 0.0f, 5.0f);
     private final float cameraFOV = 60.0f;
+
     // Libraries
     private static final ISharedLibrary libGLFW = GLFWLoader.loadGLFWLibrary();
     private static final GLFW glfw = GLFWLoader.loadGLFW(libGLFW);
@@ -175,44 +184,35 @@ public class Application {
         createSyncObjects();
         createShaderBindingTable();
         createCommandBuffers();
+        
+        // Transition output image to GENERAL layout после создания всех command buffers
+        transitionOutputImageToGeneral();
     }
 
     private void mainLoop() {
         while (glfw.windowShouldClose(window) == GLFW.FALSE) {
             glfw.pollEvents();
-            // Handle swapchain recreation before checking for minimization
             if (needsSwapchainRecreation) {
                 recreateSwapChain();
                 needsSwapchainRecreation = false;
                 continue;
             }
-            // Skip rendering when window is minimized
             if (swapChainExtent.width() <= 0 || swapChainExtent.height() <= 0) {
                 handleMinimizedWindow();
-                try {
-                    Thread.sleep(16);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
+                try { Thread.sleep(16); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
                 continue;
             }
-            System.out.println("Current frame: " + currentFrame);
-            System.out.println("Swapchain extent: " + swapChainExtent.width() + "x" + swapChainExtent.height());
-            System.out.println("Triangle vertices address: 0x" + Long.toHexString(getBufferDeviceAddress(vertexBuffer)));
             drawFrame();
         }
         deviceCommands.deviceWaitIdle(device);
     }
 
     private void cleanup() {
-        // Wait for device to be idle before cleanup
         deviceCommands.deviceWaitIdle(device);
-        // Clean up command buffers and pools first
         if (commandPool != null) {
             deviceCommands.destroyCommandPool(device, commandPool, null);
             commandPool = null;
         }
-        // Clean up acceleration structures and their buffers
         if (blas != null) {
             deviceCommands.destroyAccelerationStructureKHR(device, blas, null);
             blas = null;
@@ -221,30 +221,46 @@ public class Application {
             deviceCommands.destroyAccelerationStructureKHR(device, tlas, null);
             tlas = null;
         }
-        // Clean up acceleration structure buffers
         if (blasBuffer != null) {
-            vma.destroyBuffer(vmaAllocator, blasBuffer, blasAllocation);
+            deviceCommands.destroyBuffer(device, blasBuffer, null);
             blasBuffer = null;
-            blasAllocation = null;
+        }
+        if (blasBufferMemory != null) {
+            deviceCommands.freeMemory(device, blasBufferMemory, null);
+            blasBufferMemory = null;
         }
         if (tlasBuffer != null) {
-            vma.destroyBuffer(vmaAllocator, tlasBuffer, tlasAllocation);
+            deviceCommands.destroyBuffer(device, tlasBuffer, null);
             tlasBuffer = null;
-            tlasAllocation = null;
         }
-        // Clean up SBT buffer
+        if (tlasBufferMemory != null) {
+            deviceCommands.freeMemory(device, tlasBufferMemory, null);
+            tlasBufferMemory = null;
+        }
         if (sbtBuffer != null) {
-            vma.destroyBuffer(vmaAllocator, sbtBuffer, sbtAllocation);
+            deviceCommands.destroyBuffer(device, sbtBuffer, null);
             sbtBuffer = null;
-            sbtAllocation = null;
         }
-        // Clean up vertex buffer
+        if (sbtBufferMemory != null) {
+            deviceCommands.freeMemory(device, sbtBufferMemory, null);
+            sbtBufferMemory = null;
+        }
         if (vertexBuffer != null) {
-            vma.destroyBuffer(vmaAllocator, vertexBuffer, vertexBufferAllocation);
+            deviceCommands.destroyBuffer(device, vertexBuffer, null);
             vertexBuffer = null;
-            vertexBufferAllocation = null;
         }
-        // Clean up ray tracing pipeline resources
+        if (vertexBufferMemory != null) {
+            deviceCommands.freeMemory(device, vertexBufferMemory, null);
+            vertexBufferMemory = null;
+        }
+        if (indexBuffer != null) {
+            deviceCommands.destroyBuffer(device, indexBuffer, null);
+            indexBuffer = null;
+        }
+        if (indexBufferMemory != null) {
+            deviceCommands.freeMemory(device, indexBufferMemory, null);
+            indexBufferMemory = null;
+        }
         if (rayTracingPipeline != null) {
             deviceCommands.destroyPipeline(device, rayTracingPipeline, null);
             rayTracingPipeline = null;
@@ -257,13 +273,11 @@ public class Application {
             deviceCommands.destroyDescriptorSetLayout(device, descriptorSetLayout, null);
             descriptorSetLayout = null;
         }
-        // Clean up descriptor pool (this automatically frees descriptor sets)
         if (descriptorPool != null) {
             deviceCommands.destroyDescriptorPool(device, descriptorPool, null);
             descriptorPool = null;
-            descriptorSet = null; // Reset reference since pool destruction frees the sets
+            descriptorSet = null;
         }
-        // Clean up output image resources
         if (outputImageView != null) {
             deviceCommands.destroyImageView(device, outputImageView, null);
             outputImageView = null;
@@ -273,9 +287,7 @@ public class Application {
             outputImage = null;
             outputImageAllocation = null;
         }
-        // Clean up swapchain resources
         cleanupSwapChain();
-        // Clean up synchronization objects
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             if (inFlightFences[i] != null) {
                 deviceCommands.destroyFence(device, inFlightFences[i], null);
@@ -290,35 +302,28 @@ public class Application {
                 renderFinishedSemaphores[i] = null;
             }
         }
-        // Clean up VMA allocator (must be after all allocations are freed)
         if (vmaAllocator != null) {
             vma.destroyAllocator(vmaAllocator);
             vmaAllocator = null;
         }
-        // Clean up Vulkan device
         if (device != null) {
             deviceCommands.destroyDevice(device, null);
             device = null;
         }
-        // Clean up surface
         if (surface != null) {
             instanceCommands.destroySurfaceKHR(instance, surface, null);
             surface = null;
         }
-        // Clean up debug messenger
         if (ENABLE_VALIDATION_LAYERS && debugMessenger != null) {
             instanceCommands.destroyDebugUtilsMessengerEXT(instance, debugMessenger, null);
             debugMessenger = null;
         }
-        // Clean up instance
         if (instance != null) {
             instanceCommands.destroyInstance(instance, null);
             instance = null;
         }
-        // Clean up GLFW
         glfw.destroyWindow(window);
         glfw.terminate();
-        // Clean up shader compiler
         if (shadercCompileOptions != null) {
             shaderc.compileOptionsRelease(shadercCompileOptions);
             shadercCompileOptions = null;
@@ -329,7 +334,6 @@ public class Application {
         }
     }
 
-    // Core Vulkan setup methods
     private void createInstance() {
         try (var arena = Arena.ofConfined()) {
             if (ENABLE_VALIDATION_LAYERS && !checkValidationLayerSupport()) {
@@ -341,8 +345,7 @@ public class Application {
                     .pEngineName(BytePtr.allocateString(arena, "vk4j-rt"))
                     .engineVersion(new Version(0, 1, 0, 0).encode())
                     .apiVersion(Version.VK_API_VERSION_1_2.encode());
-            var instanceCreateInfo = VkInstanceCreateInfo.allocate(arena)
-                    .pApplicationInfo(appInfo);
+            var instanceCreateInfo = VkInstanceCreateInfo.allocate(arena).pApplicationInfo(appInfo);
             var extensions = getRequiredExtensions(arena);
             instanceCreateInfo.enabledExtensionCount((int) extensions.size())
                     .ppEnabledExtensionNames(extensions);
@@ -410,6 +413,7 @@ public class Application {
     }
 
     private record QueueFamilyIndices(int graphicsFamily, int presentFamily) {}
+
     private QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
         try (var arena = Arena.ofConfined()) {
             var pQueueFamilyCount = IntPtr.allocate(arena);
@@ -471,36 +475,32 @@ public class Application {
                     .queueFamilyIndex(indices.graphicsFamily())
                     .queueCount(1)
                     .pQueuePriorities(priorities);
-            // Base physical device features (empty but required)
             var physicalDeviceFeatures = VkPhysicalDeviceFeatures.allocate(arena);
-            // Vulkan 1.2 features
             var vulkan12Features = VkPhysicalDeviceVulkan12Features.allocate(arena)
                     .sType(VkStructureType.PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
                     .descriptorIndexing(VkConstants.TRUE)
                     .shaderSampledImageArrayNonUniformIndexing(VkConstants.TRUE)
                     .bufferDeviceAddress(VkConstants.TRUE);
-            // Acceleration structure features
             var asFeatures = VkPhysicalDeviceAccelerationStructureFeaturesKHR.allocate(arena)
                     .sType(VkStructureType.PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR)
-                    .accelerationStructure(VkConstants.TRUE);
-            // Ray tracing pipeline features
+                    .accelerationStructure(VkConstants.TRUE)
+                    .accelerationStructureCaptureReplay(VkConstants.TRUE);
             var rtFeatures = VkPhysicalDeviceRayTracingPipelineFeaturesKHR.allocate(arena)
                     .sType(VkStructureType.PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR)
-                    .rayTracingPipeline(VkConstants.TRUE);
-            // AMD-specific features for coherent memory
+                    .rayTracingPipeline(VkConstants.TRUE)
+                    .rayTracingPipelineShaderGroupHandleCaptureReplay(VkConstants.TRUE);
             var coherentMemoryFeatures = VkPhysicalDeviceCoherentMemoryFeaturesAMD.allocate(arena)
                     .sType(VkStructureType.PHYSICAL_DEVICE_COHERENT_MEMORY_FEATURES_AMD)
                     .deviceCoherentMemory(VkConstants.TRUE);
-            // CORRECT pNext chain setup for vulkan4j
             vulkan12Features.pNext(asFeatures);
             asFeatures.pNext(rtFeatures);
-            rtFeatures.pNext(coherentMemoryFeatures); // Pass the object, not segment()
-            // Enable required extensions
+            rtFeatures.pNext(coherentMemoryFeatures);
             String[] deviceExtensions = {
                     VkConstants.KHR_SWAPCHAIN_EXTENSION_NAME,
                     VkConstants.KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
                     VkConstants.KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
                     VkConstants.KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+                    VkConstants.KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
                     VkConstants.AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME
             };
             var createInfo = VkDeviceCreateInfo.allocate(arena)
@@ -509,7 +509,7 @@ public class Application {
                     .pEnabledFeatures(physicalDeviceFeatures)
                     .enabledExtensionCount(deviceExtensions.length)
                     .ppEnabledExtensionNames(PointerPtr.allocateStrings(arena, deviceExtensions))
-                    .pNext(vulkan12Features); // Start with Vulkan 1.2 features
+                    .pNext(vulkan12Features);
             if (ENABLE_VALIDATION_LAYERS) {
                 createInfo.enabledLayerCount(1)
                         .ppEnabledLayerNames(PointerPtr.allocateStrings(arena, VALIDATION_LAYER_NAME));
@@ -535,26 +535,19 @@ public class Application {
         inFlightFences = new VkFence[MAX_FRAMES_IN_FLIGHT];
         try (var arena = Arena.ofConfined()) {
             var semInfo = VkSemaphoreCreateInfo.allocate(arena);
-            var fenceInfo = VkFenceCreateInfo.allocate(arena)
-                    .flags(VkFenceCreateFlags.SIGNALED);
+            var fenceInfo = VkFenceCreateInfo.allocate(arena).flags(VkFenceCreateFlags.SIGNALED);
             for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
                 var pSem1 = VkSemaphore.Ptr.allocate(arena);
                 var result = deviceCommands.createSemaphore(device, semInfo, null, pSem1);
-                if (result != VkResult.SUCCESS) {
-                    throw new RuntimeException("Failed to create semaphore: " + VkResult.explain(result));
-                }
+                if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create semaphore: " + VkResult.explain(result));
                 imageAvailableSemaphores[i] = pSem1.read();
                 var pSem2 = VkSemaphore.Ptr.allocate(arena);
                 result = deviceCommands.createSemaphore(device, semInfo, null, pSem2);
-                if (result != VkResult.SUCCESS) {
-                    throw new RuntimeException("Failed to create semaphore: " + VkResult.explain(result));
-                }
+                if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create semaphore: " + VkResult.explain(result));
                 renderFinishedSemaphores[i] = pSem2.read();
                 var pFence = VkFence.Ptr.allocate(arena);
                 result = deviceCommands.createFence(device, fenceInfo, null, pFence);
-                if (result != VkResult.SUCCESS) {
-                    throw new RuntimeException("Failed to create fence: " + VkResult.explain(result));
-                }
+                if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create fence: " + VkResult.explain(result));
                 inFlightFences[i] = pFence.read();
             }
         }
@@ -583,14 +576,9 @@ public class Application {
     private void createShaderCompiler() {
         shadercCompiler = shaderc.compilerInitialize();
         shadercCompileOptions = shaderc.compileOptionsInitialize();
-        shaderc.compileOptionsSetTargetEnv(
-                shadercCompileOptions,
-                ShadercTargetEnv.VULKAN,
-                ShadercEnvVersion.VULKAN_1_2
-        );
+        shaderc.compileOptionsSetTargetEnv(shadercCompileOptions, ShadercTargetEnv.VULKAN, ShadercEnvVersion.VULKAN_1_2);
     }
 
-    // Swapchain methods
     private void createSwapchain() {
         try (var arena = Arena.ofConfined()) {
             var support = querySwapChainSupport(physicalDevice, arena);
@@ -628,11 +616,8 @@ public class Application {
         }
     }
 
-    private record SwapchainSupportDetails(
-            VkSurfaceCapabilitiesKHR capabilities,
-            VkSurfaceFormatKHR.Ptr formats,
-            IntPtr presentModes
-    ) {}
+    private record SwapchainSupportDetails(VkSurfaceCapabilitiesKHR capabilities, VkSurfaceFormatKHR.Ptr formats, IntPtr presentModes) {}
+
     private SwapchainSupportDetails querySwapChainSupport(VkPhysicalDevice dev, Arena arena) {
         var caps = VkSurfaceCapabilitiesKHR.allocate(arena);
         instanceCommands.getPhysicalDeviceSurfaceCapabilitiesKHR(dev, surface, caps);
@@ -651,8 +636,7 @@ public class Application {
 
     private VkSurfaceFormatKHR chooseSwapSurfaceFormat(VkSurfaceFormatKHR.Ptr formats) {
         for (var f : formats) {
-            if (f.format() == VkFormat.R8G8B8A8_UNORM && f.colorSpace() == VkColorSpaceKHR.SRGB_NONLINEAR)
-                return f;
+            if (f.format() == VkFormat.R8G8B8A8_UNORM && f.colorSpace() == VkColorSpaceKHR.SRGB_NONLINEAR) return f;
         }
         return formats.at(0);
     }
@@ -668,7 +652,6 @@ public class Application {
         if (caps.currentExtent().width() != NativeLayout.UINT32_MAX) {
             int width = caps.currentExtent().width();
             int height = caps.currentExtent().height();
-            // Return current extent, but clamp to minimum 1x1 to avoid zero-sized resources
             return VkExtent2D.allocate(arena).width(width > 0 ? width : 1).height(height > 0 ? height : 1);
         }
         try (var local = Arena.ofConfined()) {
@@ -676,7 +659,6 @@ public class Application {
             glfw.getFramebufferSize(window, w, h);
             int width = w.read();
             int height = h.read();
-            // Ensure we have at least 1x1 dimensions to prevent Vulkan API errors
             width = Math.max(1, width);
             height = Math.max(1, height);
             return VkExtent2D.allocate(arena)
@@ -709,49 +691,109 @@ public class Application {
         }
     }
 
-    // Triangle vertex data
+    // ✅ ИСПРАВЛЕНО: Копирование через ByteBuffer с HOST_COHERENT
     private void createVertexBuffer() {
-        // LARGER TRIANGLE POSITIONED IN FRONT OF CAMERA
+        // Маленький треугольник ПЕРЕД камерой (Z=3), центрированный на оси
         float[] vertices = {
-                -2.5f, -2.5f, -3.0f,  // Much larger triangle moved forward
-                2.5f, -2.5f, -3.0f,
-                0.0f,  2.5f, -3.0f
+                -1.0f, -0.33f, 3.0f,   // Левый нижний
+                 1.0f, -0.33f, 3.0f,   // Правый нижний
+                 0.0f,  1.67f, 3.0f    // Верхний (смещён вверх чтобы центр был в Y=0)
         };
         try (var arena = Arena.ofConfined()) {
             var size = vertices.length * Float.BYTES;
-            var info = VkBufferCreateInfo.allocate(arena)
+            
+            // Создаем буфер напрямую через Vulkan
+            var bufferCreateInfo = VkBufferCreateInfo.allocate(arena)
                     .size(size)
                     .usage(VkBufferUsageFlags.SHADER_DEVICE_ADDRESS |
                             VkBufferUsageFlags.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR);
-            var allocInfo = VmaAllocationCreateInfo.allocate(arena)
-                    .usage(VmaMemoryUsage.AUTO)
-                    .flags(VmaAllocationCreateFlags.HOST_ACCESS_SEQUENTIAL_WRITE);
+            
             var pBuffer = VkBuffer.Ptr.allocate(arena);
-            var pAlloc = VmaAllocation.Ptr.allocate(arena);
-            var result = vma.createBuffer(vmaAllocator, info, allocInfo, pBuffer, pAlloc, null);
+            var result = deviceCommands.createBuffer(device, bufferCreateInfo, null, pBuffer);
             if (result != VkResult.SUCCESS) {
                 throw new RuntimeException("Failed to create vertex buffer: " + VkResult.explain(result));
             }
             vertexBuffer = pBuffer.read();
-            vertexBufferAllocation = pAlloc.read();
+            
+            // Получаем memory requirements
+            var memReqs = VkMemoryRequirements.allocate(arena);
+            deviceCommands.getBufferMemoryRequirements(device, vertexBuffer, memReqs);
+            
+            // Выделяем память HOST_VISIBLE | HOST_COHERENT | DEVICE_ADDRESS
+            var memAlloc = VkMemoryAllocateInfo.allocate(arena)
+                    .allocationSize(memReqs.size())
+                    .memoryTypeIndex(findMemoryType(memReqs.memoryTypeBits(), VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT));
+            
+            // Добавляем VkMemoryAllocateFlagsInfo для DEVICE_ADDRESS
+            var memAllocFlags = VkMemoryAllocateFlagsInfo.allocate(arena)
+                    .sType(VkStructureType.MEMORY_ALLOCATE_FLAGS_INFO)
+                    .flags(VkMemoryAllocateFlags.DEVICE_ADDRESS);
+            memAlloc.pNext(memAllocFlags.segment());
+            
+            var pDeviceMemory = VkDeviceMemory.Ptr.allocate(arena);
+            result = deviceCommands.allocateMemory(device, memAlloc, null, pDeviceMemory);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to allocate vertex buffer memory: " + VkResult.explain(result));
+            }
+            vertexBufferMemory = pDeviceMemory.read();
+            
+            // Bind memory
+            result = deviceCommands.bindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to bind vertex buffer memory: " + VkResult.explain(result));
+            }
+            
+            // Копируем данные
             var ppData = PointerPtr.allocate(arena);
-            vma.mapMemory(vmaAllocator, vertexBufferAllocation, ppData);
+            result = deviceCommands.mapMemory(device, pDeviceMemory.read(), 0, size, 0, ppData);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to map vertex buffer: " + VkResult.explain(result));
+            }
             ppData.read().reinterpret(size).copyFrom(MemorySegment.ofArray(vertices));
-            vma.unmapMemory(vmaAllocator, vertexBufferAllocation);
+            
+            // FLUSH memory чтобы GPU видел данные
+            var flushRange = VkMappedMemoryRange.allocate(arena)
+                    .memory(pDeviceMemory.read())
+                    .offset(0)
+                    .size(size);
+            deviceCommands.flushMappedMemoryRanges(device, 1, flushRange);
+            
+            deviceCommands.unmapMemory(device, pDeviceMemory.read());
+            
+            // Получаем device address
+            long vertexAddress = getBufferDeviceAddress(vertexBuffer);
+            System.out.println("=== VERTEX BUFFER CREATED (direct Vulkan) ===");
+            System.out.println("Size: " + size + " bytes (" + vertices.length + " floats)");
+            System.out.println("GPU Address: 0x" + Long.toHexString(vertexAddress));
+            System.out.println("Vertex data: " + java.util.Arrays.toString(vertices));
         }
     }
 
     private long getBufferDeviceAddress(VkBuffer buffer) {
         try (var arena = Arena.ofConfined()) {
-            var info = VkBufferDeviceAddressInfo.allocate(arena).buffer(buffer);
-            return deviceCommands.getBufferDeviceAddress(device, info);
+            // Пробуем через getBufferOpaqueCaptureAddress
+            var info = VkBufferDeviceAddressInfo.allocate(arena)
+                    .sType(VkStructureType.BUFFER_DEVICE_ADDRESS_INFO)
+                    .buffer(buffer);
+            
+            // Для AMD может потребоваться opaque capture address
+            long addr = deviceCommands.getBufferDeviceAddress(device, info);
+            
+            // Проверяем, что адрес выглядит правильно
+            if (addr < 0x1000000000L) {
+                System.out.println("getBufferDeviceAddress returned small address: 0x" + Long.toHexString(addr));
+                // На AMD это может быть физический адрес, а нам нужен виртуальный
+                // Попробуем использовать opaque capture address
+                var opaqueInfo = VkBufferOpaqueCaptureAddressCreateInfo.allocate(arena)
+                        .sType(VkStructureType.BUFFER_OPAQUE_CAPTURE_ADDRESS_CREATE_INFO);
+            }
+            
+            return addr;
         }
     }
 
-    // Helper class for buffer pairs
     private record Pair<T1, T2>(T1 first, T2 second) {}
 
-    // Helper method to create buffers with proper cleanup handling
     private Pair<VkBuffer, VmaAllocation> createBuffer(
             int size,
             @Bitmask(VkBufferUsageFlags.class) int usage,
@@ -759,8 +801,22 @@ public class Application {
             @Bitmask(VkMemoryPropertyFlags.class) int memFlags,
             @Nullable VmaAllocationInfo allocInfo
     ) {
+        return createBuffer(size, usage, vmaFlags, memFlags, allocInfo, false);
+    }
+
+    private Pair<VkBuffer, VmaAllocation> createBuffer(
+            int size,
+            @Bitmask(VkBufferUsageFlags.class) int usage,
+            @Bitmask(VmaAllocationCreateFlags.class) int vmaFlags,
+            @Bitmask(VkMemoryPropertyFlags.class) int memFlags,
+            @Nullable VmaAllocationInfo allocInfo,
+            boolean captureReplay
+    ) {
         try (var arena = Arena.ofConfined()) {
-            var info = VkBufferCreateInfo.allocate(arena).size(size).usage(usage).sharingMode(VkSharingMode.EXCLUSIVE);
+            var info = VkBufferCreateInfo.allocate(arena)
+                    .size(size)
+                    .usage(usage)
+                    .sharingMode(VkSharingMode.EXCLUSIVE);
             var allocCreateInfo = VmaAllocationCreateInfo.allocate(arena)
                     .usage(VmaMemoryUsage.AUTO)
                     .flags(vmaFlags)
@@ -776,213 +832,470 @@ public class Application {
     }
 
     private Pair<VkBuffer, VmaAllocation> createScratchBuffer(int size) {
-        return createBuffer(
-                size,
-                VkBufferUsageFlags.STORAGE_BUFFER |
-                        VkBufferUsageFlags.SHADER_DEVICE_ADDRESS,
-                0,
-                0,
-                null
-        );
+        try (var arena = Arena.ofConfined()) {
+            var info = VkBufferCreateInfo.allocate(arena)
+                    .size(size)
+                    .usage(VkBufferUsageFlags.STORAGE_BUFFER | VkBufferUsageFlags.SHADER_DEVICE_ADDRESS);
+            var pBuffer = VkBuffer.Ptr.allocate(arena);
+            var result = deviceCommands.createBuffer(device, info, null, pBuffer);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to create scratch buffer: " + VkResult.explain(result));
+            }
+            VkBuffer buffer = pBuffer.read();
+            
+            // Получаем memory requirements
+            var memReqs = VkMemoryRequirements.allocate(arena);
+            deviceCommands.getBufferMemoryRequirements(device, buffer, memReqs);
+            
+            // Выделяем память с DEVICE_ADDRESS флагом
+            var memAlloc = VkMemoryAllocateInfo.allocate(arena)
+                    .allocationSize(memReqs.size())
+                    .memoryTypeIndex(findMemoryType(memReqs.memoryTypeBits(), VkMemoryPropertyFlags.DEVICE_LOCAL));
+            var memAllocFlags = VkMemoryAllocateFlagsInfo.allocate(arena)
+                    .sType(VkStructureType.MEMORY_ALLOCATE_FLAGS_INFO)
+                    .flags(VkMemoryAllocateFlags.DEVICE_ADDRESS);
+            memAlloc.pNext(memAllocFlags.segment());
+            
+            var pDeviceMemory = VkDeviceMemory.Ptr.allocate(arena);
+            result = deviceCommands.allocateMemory(device, memAlloc, null, pDeviceMemory);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to allocate scratch buffer memory: " + VkResult.explain(result));
+            }
+            
+            result = deviceCommands.bindBufferMemory(device, buffer, pDeviceMemory.read(), 0);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to bind scratch buffer memory: " + VkResult.explain(result));
+            }
+            
+            return new Pair<>(buffer, null);
+        }
     }
 
     private Pair<VkBuffer, VmaAllocation> createAccelerationStructureBuffer(int size) {
-        return createBuffer(
-                size,
-                VkBufferUsageFlags.ACCELERATION_STRUCTURE_STORAGE_KHR |
-                        VkBufferUsageFlags.SHADER_DEVICE_ADDRESS,
-                0,
-                0,
-                null
-        );
+        try (var arena = Arena.ofConfined()) {
+            var info = VkBufferCreateInfo.allocate(arena)
+                    .size(size)
+                    .usage(VkBufferUsageFlags.ACCELERATION_STRUCTURE_STORAGE_KHR | VkBufferUsageFlags.SHADER_DEVICE_ADDRESS);
+            var pBuffer = VkBuffer.Ptr.allocate(arena);
+            var result = deviceCommands.createBuffer(device, info, null, pBuffer);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to create AS buffer: " + VkResult.explain(result));
+            }
+            VkBuffer buffer = pBuffer.read();
+            
+            // Получаем memory requirements
+            var memReqs = VkMemoryRequirements.allocate(arena);
+            deviceCommands.getBufferMemoryRequirements(device, buffer, memReqs);
+            
+            // Выделяем память с DEVICE_ADDRESS флагом
+            var memAlloc = VkMemoryAllocateInfo.allocate(arena)
+                    .allocationSize(memReqs.size())
+                    .memoryTypeIndex(findMemoryType(memReqs.memoryTypeBits(), VkMemoryPropertyFlags.DEVICE_LOCAL));
+            var memAllocFlags = VkMemoryAllocateFlagsInfo.allocate(arena)
+                    .sType(VkStructureType.MEMORY_ALLOCATE_FLAGS_INFO)
+                    .flags(VkMemoryAllocateFlags.DEVICE_ADDRESS);
+            memAlloc.pNext(memAllocFlags.segment());
+            
+            var pDeviceMemory = VkDeviceMemory.Ptr.allocate(arena);
+            result = deviceCommands.allocateMemory(device, memAlloc, null, pDeviceMemory);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to allocate AS buffer memory: " + VkResult.explain(result));
+            }
+            
+            result = deviceCommands.bindBufferMemory(device, buffer, pDeviceMemory.read(), 0);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to bind AS buffer memory: " + VkResult.explain(result));
+            }
+            
+            return new Pair<>(buffer, null);
+        }
     }
 
-    // Acceleration structure creation - critical for AMD
     private void createAccelerationStructures() {
         long vertexAddress = getBufferDeviceAddress(vertexBuffer);
         try (var arena = Arena.ofConfined()) {
-            // Query acceleration structure properties
+            // Получаем свойства устройства для выравнивания
             var asProps = VkPhysicalDeviceAccelerationStructurePropertiesKHR.allocate(arena)
                     .sType(VkStructureType.PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR);
             var props2 = VkPhysicalDeviceProperties2.allocate(arena).pNext(asProps.segment());
             instanceCommands.getPhysicalDeviceProperties2(physicalDevice, props2);
-            long maxPrimitives = asProps.maxPrimitiveCount();
-            System.out.println("Device max primitive count: " + maxPrimitives);
-            // === BLAS (Bottom-Level Acceleration Structure) ===
+
+            // ========== BOTTOM LEVEL AS (BLAS) ==========
+            // Получаем адрес индексного буфера (создадим его прямо здесь)
+            int[] indices = { 0, 1, 2 };
+            var indexSize = indices.length * Integer.BYTES;
+            
+            var indexBufferCreateInfo = VkBufferCreateInfo.allocate(arena)
+                    .size(indexSize)
+                    .usage(VkBufferUsageFlags.SHADER_DEVICE_ADDRESS | VkBufferUsageFlags.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR);
+            var pIndexBuffer = VkBuffer.Ptr.allocate(arena);
+            var indexResult = deviceCommands.createBuffer(device, indexBufferCreateInfo, null, pIndexBuffer);
+            if (indexResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to create index buffer: " + VkResult.explain(indexResult));
+            }
+            VkBuffer localIndexBuffer = pIndexBuffer.read();
+            
+            var indexMemReqs = VkMemoryRequirements.allocate(arena);
+            deviceCommands.getBufferMemoryRequirements(device, localIndexBuffer, indexMemReqs);
+            var indexMemAlloc = VkMemoryAllocateInfo.allocate(arena)
+                    .allocationSize(indexMemReqs.size())
+                    .memoryTypeIndex(findMemoryType(indexMemReqs.memoryTypeBits(), VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT));
+            var indexMemAllocFlags = VkMemoryAllocateFlagsInfo.allocate(arena)
+                    .sType(VkStructureType.MEMORY_ALLOCATE_FLAGS_INFO)
+                    .flags(VkMemoryAllocateFlags.DEVICE_ADDRESS);
+            indexMemAlloc.pNext(indexMemAllocFlags.segment());
+            var pIndexMemory = VkDeviceMemory.Ptr.allocate(arena);
+            indexResult = deviceCommands.allocateMemory(device, indexMemAlloc, null, pIndexMemory);
+            if (indexResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to allocate index buffer memory: " + VkResult.explain(indexResult));
+            }
+            VkDeviceMemory indexBufferMemory = pIndexMemory.read();
+            indexResult = deviceCommands.bindBufferMemory(device, localIndexBuffer, indexBufferMemory, 0);
+            if (indexResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to bind index buffer memory: " + VkResult.explain(indexResult));
+            }
+            
+            var ppIndexData = PointerPtr.allocate(arena);
+            indexResult = deviceCommands.mapMemory(device, indexBufferMemory, 0, indexSize, 0, ppIndexData);
+            if (indexResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to map index buffer: " + VkResult.explain(indexResult));
+            }
+            ppIndexData.read().reinterpret(indexSize).copyFrom(MemorySegment.ofArray(indices));
+            
+            // FLUSH index memory
+            var flushIndex = VkMappedMemoryRange.allocate(arena)
+                    .memory(indexBufferMemory)
+                    .offset(0)
+                    .size(indexSize);
+            deviceCommands.flushMappedMemoryRanges(device, 1, flushIndex);
+            
+            deviceCommands.unmapMemory(device, indexBufferMemory);
+            
+            long indexAddress = getBufferDeviceAddress(localIndexBuffer);
+            System.out.println("Index buffer address: 0x" + Long.toHexString(indexAddress));
+            
+            // Создаем transform buffer (identity matrix) как у Sascha Willems
+            float[] transform = {
+                1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, 1.0f, 0.0f
+            };
+            var transformSize = transform.length * Float.BYTES;
+            
+            var transformBufferCreateInfo = VkBufferCreateInfo.allocate(arena)
+                    .size(transformSize)
+                    .usage(VkBufferUsageFlags.SHADER_DEVICE_ADDRESS | VkBufferUsageFlags.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR);
+            var pTransformBuffer = VkBuffer.Ptr.allocate(arena);
+            var transformResult = deviceCommands.createBuffer(device, transformBufferCreateInfo, null, pTransformBuffer);
+            if (transformResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to create transform buffer: " + VkResult.explain(transformResult));
+            }
+            VkBuffer localTransformBuffer = pTransformBuffer.read();
+            
+            var transformMemReqs = VkMemoryRequirements.allocate(arena);
+            deviceCommands.getBufferMemoryRequirements(device, localTransformBuffer, transformMemReqs);
+            var transformMemAlloc = VkMemoryAllocateInfo.allocate(arena)
+                    .allocationSize(transformMemReqs.size())
+                    .memoryTypeIndex(findMemoryType(transformMemReqs.memoryTypeBits(), VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT));
+            var transformMemAllocFlags = VkMemoryAllocateFlagsInfo.allocate(arena)
+                    .sType(VkStructureType.MEMORY_ALLOCATE_FLAGS_INFO)
+                    .flags(VkMemoryAllocateFlags.DEVICE_ADDRESS);
+            transformMemAlloc.pNext(transformMemAllocFlags.segment());
+            var pTransformMemory = VkDeviceMemory.Ptr.allocate(arena);
+            transformResult = deviceCommands.allocateMemory(device, transformMemAlloc, null, pTransformMemory);
+            if (transformResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to allocate transform buffer memory: " + VkResult.explain(transformResult));
+            }
+            VkDeviceMemory transformBufferMemory = pTransformMemory.read();
+            transformResult = deviceCommands.bindBufferMemory(device, localTransformBuffer, transformBufferMemory, 0);
+            if (transformResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to bind transform buffer memory: " + VkResult.explain(transformResult));
+            }
+            
+            var ppTransformData = PointerPtr.allocate(arena);
+            transformResult = deviceCommands.mapMemory(device, transformBufferMemory, 0, transformSize, 0, ppTransformData);
+            if (transformResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to map transform buffer: " + VkResult.explain(transformResult));
+            }
+            ppTransformData.read().reinterpret(transformSize).copyFrom(MemorySegment.ofArray(transform));
+            
+            // FLUSH transform memory
+            var flushTransform = VkMappedMemoryRange.allocate(arena)
+                    .memory(transformBufferMemory)
+                    .offset(0)
+                    .size(transformSize);
+            deviceCommands.flushMappedMemoryRanges(device, 1, flushTransform);
+            
+            deviceCommands.unmapMemory(device, transformBufferMemory);
+            
+            long transformAddress = getBufferDeviceAddress(localTransformBuffer);
+            System.out.println("Transform buffer address: 0x" + Long.toHexString(transformAddress));
+            
+            // ВАЖНО: deviceWaitIdle чтобы убедиться что host записи завершены
+            deviceCommands.deviceWaitIdle(device);
+
             var triangles = VkAccelerationStructureGeometryTrianglesDataKHR.allocate(arena)
                     .sType(VkStructureType.ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR)
                     .vertexFormat(VkFormat.R32G32B32_SFLOAT)
-                    .indexType(VkIndexType.NONE_KHR)
-                    .maxVertex(2)  // Max INDEX (0,1,2 for 3 vertices)
-                    .vertexStride(3 * Float.BYTES);
-            // CORRECT API: Set vertex data address
-            triangles.vertexData().deviceAddress(vertexAddress);
-            // CORRECT API: Use proper geometry flags for AMD
+                    .vertexData(vd -> vd.deviceAddress(vertexAddress))
+                    .vertexStride(12)  // 12 bytes (3 floats)
+                    .maxVertex(2)  // Индекс последней вершины (0-based)
+                    .indexType(VkIndexType.UINT32)  // Используем индексы!
+                    .indexData(vd -> vd.deviceAddress(indexAddress))  // Адрес индексного буфера
+                    .transformData(vd -> vd.deviceAddress(0));  // NULL transform (как у Sascha Willems!)
+
             var geometry = VkAccelerationStructureGeometryKHR.allocate(arena)
                     .sType(VkStructureType.ACCELERATION_STRUCTURE_GEOMETRY_KHR)
                     .geometryType(VkGeometryTypeKHR.TRIANGLES)
-                    .flags(VkGeometryFlagsKHR.OPAQUE |
-                            VkGeometryInstanceFlagsKHR.TRIANGLE_FACING_CULL_DISABLE | // Critical for AMD
-                            VkGeometryFlagsKHR.NO_DUPLICATE_ANY_HIT_INVOCATION);
-            // CORRECT API: Set triangles data in geometry
-            geometry.geometry().triangles(triangles);
-            // Rest of BLAS creation remains the same...
+                    .geometry(vkGeometryDataKHR -> vkGeometryDataKHR.triangles(triangles))
+                    .flags(VkGeometryFlagsKHR.OPAQUE);  // OPAQUE
+
             var buildInfo = VkAccelerationStructureBuildGeometryInfoKHR.allocate(arena)
                     .sType(VkStructureType.ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR)
                     .type(VkAccelerationStructureTypeKHR.BOTTOM_LEVEL)
-                    .flags(VkBuildAccelerationStructureFlagsKHR.PREFER_FAST_TRACE |
-                            VkBuildAccelerationStructureFlagsKHR.ALLOW_UPDATE)
+                    .flags(VkBuildAccelerationStructureFlagsKHR.PREFER_FAST_TRACE | VkBuildAccelerationStructureFlagsKHR.ALLOW_UPDATE)
                     .mode(VkBuildAccelerationStructureModeKHR.BUILD)
                     .geometryCount(1)
                     .pGeometries(geometry);
-            // Create build range info
+
+            // 1 треугольник (3 вершины без индексов)
             var buildRangeInfo = VkAccelerationStructureBuildRangeInfoKHR.allocate(arena)
-                    .primitiveCount(1)  // Only 1 triangle
+                    .primitiveCount(1)
                     .primitiveOffset(0)
                     .firstVertex(0)
                     .transformOffset(0);
             var ppBuildRangeInfo = PointerPtr.allocate(arena);
             ppBuildRangeInfo.write(buildRangeInfo);
-            // Get required sizes
+
+            // Получаем размеры
             var maxPrimCount = IntPtr.allocate(arena, 1);
             maxPrimCount.write(0, 1);
             var sizeInfo = VkAccelerationStructureBuildSizesInfoKHR.allocate(arena);
-            deviceCommands.getAccelerationStructureBuildSizesKHR(
-                    device, VkAccelerationStructureBuildTypeKHR.DEVICE, buildInfo, maxPrimCount, sizeInfo);
-            // Calculate proper buffer sizes with alignment padding
+            deviceCommands.getAccelerationStructureBuildSizesKHR(device, VkAccelerationStructureBuildTypeKHR.DEVICE, buildInfo, maxPrimCount, sizeInfo);
+
+            System.out.println("=== BLAS DEBUG ===");
+            System.out.println("Vertex address: 0x" + Long.toHexString(vertexAddress));
+            System.out.println("Index address: 0x" + Long.toHexString(indexAddress));
+            System.out.println("Transform address: 0x" + Long.toHexString(transformAddress));
+            System.out.println("Vertex stride: 12");
+            System.out.println("Vertex format: R32G32B32_SFLOAT");
+            System.out.println("Index type: UINT32");
+            System.out.println("Max vertex: 2");
+            System.out.println("Primitive count: 1");
+            System.out.println("AS size: " + sizeInfo.accelerationStructureSize());
+            System.out.println("Build scratch size: " + sizeInfo.buildScratchSize());
+            System.out.println("Build type: DEVICE");
+            System.out.println("Build flags: PREFER_FAST_TRACE | ALLOW_UPDATE");
+
+            // Выделяем буфер для самой структуры ускорения
+            int alignment = asProps.minAccelerationStructureScratchOffsetAlignment();
+            final int MIN_PADDING = 4096;
             long blasSize = sizeInfo.accelerationStructureSize();
             long scratchSize = sizeInfo.buildScratchSize();
-            int alignment = asProps.minAccelerationStructureScratchOffsetAlignment();
-            // Add proper padding for alignment (must be at least 4096 bytes for AMD)
-            final int MIN_PADDING = 4096; // Increased from 256 for AMD compatibility
             blasSize = (blasSize + MIN_PADDING - 1) & ~(MIN_PADDING - 1);
             scratchSize = (scratchSize + alignment - 1) & ~(alignment - 1);
-            scratchSize += 4096; // Extra safety padding for AMD
-            System.out.println("Required BLAS size: " + blasSize + " bytes (with padding)");
-            System.out.println("Required scratch size: " + scratchSize + " bytes (with padding)");
-            // Create properly sized buffers
+
             var blasResult = createAccelerationStructureBuffer((int) blasSize);
             blasBuffer = blasResult.first;
-            blasAllocation = blasResult.second;
-            var scratchBuffer1 = createScratchBuffer((int) scratchSize);
-            // Align scratch address
-            long scratchAddress = getBufferDeviceAddress(scratchBuffer1.first);
-            long alignedScratchAddress = (scratchAddress + alignment - 1) & ~(alignment - 1);
-            // Create BLAS
+            blasBufferMemory = null; // createAccelerationStructureBuffer теперь не возвращает memory
+
+            // Создаем саму структуру ускорения
             var blasCreateInfo = VkAccelerationStructureCreateInfoKHR.allocate(arena)
                     .sType(VkStructureType.ACCELERATION_STRUCTURE_CREATE_INFO_KHR)
                     .buffer(blasBuffer)
                     .size(blasSize)
                     .type(VkAccelerationStructureTypeKHR.BOTTOM_LEVEL);
+
             var pBlas = VkAccelerationStructureKHR.Ptr.allocate(arena);
             var result = deviceCommands.createAccelerationStructureKHR(device, blasCreateInfo, null, pBlas);
             if (result != VkResult.SUCCESS) {
                 throw new RuntimeException("Failed to create BLAS: " + VkResult.explain(result));
             }
             blas = pBlas.read();
-            // Submit BLAS build
-            var cmd1 = beginSingleTimeCommands();
+
+            // ========== BUILD BLAS ==========
+            var scratchBuffer1 = createScratchBuffer((int) scratchSize);
+            long scratchAddress = getBufferDeviceAddress(scratchBuffer1.first);
+            long alignedScratchAddress = (scratchAddress + alignment - 1) & ~(alignment - 1);
+
             buildInfo.scratchData().deviceAddress(alignedScratchAddress);
             buildInfo.dstAccelerationStructure(blas);
+
+            var cmd1 = beginSingleTimeCommands();
+            
+            // Memory barrier перед BLAS build
+            var memoryBarrier = VkMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.MEMORY_BARRIER)
+                    .srcAccessMask(VkAccessFlags.HOST_WRITE)
+                    .dstAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_READ_KHR);
+            deviceCommands.cmdPipelineBarrier(cmd1, VkPipelineStageFlags.HOST, VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR, 0, 1, memoryBarrier, 0, null, 0, null);
+            
             deviceCommands.cmdBuildAccelerationStructuresKHR(cmd1, 1, buildInfo, ppBuildRangeInfo);
-            // AMD-SPECIFIC MEMORY BARRIERS - comprehensive barriers
+
+            // Memory barrier после BLAS build
             var blasBarrier = VkMemoryBarrier.allocate(arena)
                     .sType(VkStructureType.MEMORY_BARRIER)
-                    .srcAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_WRITE_KHR |
-                            VkAccessFlags.ACCELERATION_STRUCTURE_READ_KHR)
+                    .srcAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_WRITE_KHR)
                     .dstAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_READ_KHR);
-            deviceCommands.cmdPipelineBarrier(cmd1,
-                    VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR,
-                    VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR, // Only this stage for AMD
-                    VkDependencyFlags.BY_REGION,
-                    1, blasBarrier, 0, null, 0, null);
+            deviceCommands.cmdPipelineBarrier(cmd1, VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR, VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR, 0, 1, blasBarrier, 0, null, 0, null);
+
             endSingleTimeCommands(cmd1);
-            // AMD-SPECIFIC: Add explicit synchronization between BLAS and TLAS builds
-            fenceSync();
-            // Destroy scratch buffer
-            vma.destroyBuffer(vmaAllocator, scratchBuffer1.first, scratchBuffer1.second);
-            long blasAddress = getAccelerationStructureDeviceAddress(blas);
-            // === TLAS (Top-Level Acceleration Structure) ===
+
+            deviceCommands.destroyBuffer(device, scratchBuffer1.first, null);
+            deviceCommands.destroyBuffer(device, localIndexBuffer, null);
+            deviceCommands.freeMemory(device, indexBufferMemory, null);
+            deviceCommands.destroyBuffer(device, localTransformBuffer, null);
+            deviceCommands.freeMemory(device, transformBufferMemory, null);
+            
+            // Получаем ACCELERATION STRUCTURE device address (не buffer address!)
+            var asAddressInfo = VkAccelerationStructureDeviceAddressInfoKHR.allocate(arena)
+                    .sType(VkStructureType.ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR)
+                    .accelerationStructure(blas);
+            long blasAddress = deviceCommands.getAccelerationStructureDeviceAddressKHR(device, asAddressInfo);
+            System.out.println("BLAS AS handle: 0x" + Long.toHexString(blas.segment().address()));
+            System.out.println("BLAS AS address (for TLAS): 0x" + Long.toHexString(blasAddress));
+
+            // ========== TOP LEVEL AS (TLAS) ==========
+            // VkAccelerationStructureInstanceKHR layout (64 байта, bitfield packing!):
+            // Offset 0-47:  transform[12] (12 floats = 48 bytes)
+            // Offset 48-51: packed uint32: instanceCustomIndex(24 bits) | mask(8 bits)
+            // Offset 52-55: packed uint32: instanceShaderBindingTableRecordOffset(24 bits) | flags(8 bits)
+            // Offset 56-63: accelerationStructureReference (8 bytes) - BLAS device address
             final int INSTANCE_SIZE = 64;
             var instanceData = arena.allocate(INSTANCE_SIZE);
-            instanceData.fill((byte)0); // Clear the entire buffer
-            // Proper transform for AMD hardware - ensure triangle is in front of camera
-            float[] transform = {
-                    1.0f, 0.0f, 0.0f, 0.0f,
-                    0.0f, 1.0f, 0.0f, 0.0f,
-                    0.0f, 0.0f, 1.0f, 3.0f, // Move triangle TOWARD camera (positive Z)
-                    0.0f, 0.0f, 0.0f, 1.0f
+
+            // Transform matrix: 12 floats (offset 0-47)
+            float[] instanceTransform = {
+                    1.0f, 0.0f, 0.0f, 0.0f,  // Row 0: x-ось
+                    0.0f, 1.0f, 0.0f, 0.0f,  // Row 1: y-ось
+                    0.0f, 0.0f, 1.0f, 0.0f   // Row 2: z-ось (no translation)
             };
             for (int i = 0; i < 12; i++) {
-                instanceData.setAtIndex(ValueLayout.JAVA_FLOAT, i, transform[i]);
+                instanceData.set(ValueLayout.JAVA_FLOAT, i * Float.BYTES, instanceTransform[i]);
             }
-            // Instance mask (0xFF)
-            instanceData.setAtIndex(ValueLayout.JAVA_INT, 12, 0xFF); // offset 48
-            // For TLAS instance creation - CORRECT API for instance flags:
-            // Instance flags - AMD SPECIFIC FIX (CORRECTED)
-            instanceData.setAtIndex(ValueLayout.JAVA_INT, 13,
-                    VkGeometryInstanceFlagsKHR.TRIANGLE_FACING_CULL_DISABLE |
-                            VkGeometryInstanceFlagsKHR.FORCE_OPAQUE); // This is 0x1 | 0x4 = 0x5
-            // BLAS device address
-            instanceData.setAtIndex(ValueLayout.JAVA_LONG, 7, blasAddress); // offset 56
-            System.out.println("FIXED Instance Data - Packed 48 (mask): 0x" + Integer.toHexString(instanceData.getAtIndex(ValueLayout.JAVA_INT, 12)));
-            System.out.println("FIXED Instance Data - Packed 52 (flags): 0x" + Integer.toHexString(instanceData.getAtIndex(ValueLayout.JAVA_INT, 13)));
-            System.out.println("FIXED Instance Data - BLAS Address: " + Long.toHexString(blasAddress));
-            // Create instance buffer
-            var instBuffer = createBuffer(
-                    INSTANCE_SIZE,
-                    VkBufferUsageFlags.SHADER_DEVICE_ADDRESS |
-                            VkBufferUsageFlags.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                    VmaAllocationCreateFlags.HOST_ACCESS_RANDOM,
-                    VkMemoryPropertyFlags.HOST_COHERENT,
-                    null
-            );
+
+            // ПРАВИЛЬНЫЙ bitfield packing для Vulkan:
+            // Offset 48: instanceCustomIndex(24) | mask(8)
+            int customIndexAndMask = 0 | (0xFF << 24);  // customIndex=0, mask=0xFF
+            instanceData.set(ValueLayout.JAVA_INT, 48, customIndexAndMask);
+
+            // Offset 52: instanceShaderBindingTableRecordOffset(24) | flags(8)
+            int sbtOffsetAndFlags = 0 | (VkGeometryInstanceFlagsKHR.TRIANGLE_FACING_CULL_DISABLE << 24);
+            instanceData.set(ValueLayout.JAVA_INT, 52, sbtOffsetAndFlags);
+
+            // Offset 56: accelerationStructureReference (BLAS device address)
+            instanceData.set(ValueLayout.JAVA_LONG, 56, blasAddress);
+            
+            // Проверяем запись - читаем обратно
+            long verifyAddress = instanceData.get(ValueLayout.JAVA_LONG, 56);
+            System.out.println("BLAS address written: 0x" + Long.toHexString(blasAddress));
+            System.out.println("BLAS address read back: 0x" + Long.toHexString(verifyAddress));
+            System.out.println("Address match: " + (blasAddress == verifyAddress));
+            
+            // Debug: показываем все байты instance
+            System.out.println("=== TLAS INSTANCE BYTES (64 bytes) ===");
+            for (int i = 0; i < 64; i += 8) {
+                long val = instanceData.get(ValueLayout.JAVA_LONG, i);
+                System.out.printf("Offset %3d: 0x%016X%n", i, val);
+            }
+
+            // Проверяем BLAS address в буфере
+            long addr56 = instanceData.get(ValueLayout.JAVA_LONG, 56);
+            System.out.println("BLAS address in instBuffer: 0x" + Long.toHexString(addr56));
+
+            // Буфер для экземпляра
+            var instBufferCreateInfo = VkBufferCreateInfo.allocate(arena)
+                    .size(INSTANCE_SIZE)
+                    .usage(VkBufferUsageFlags.SHADER_DEVICE_ADDRESS | VkBufferUsageFlags.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR);
+            var pInstBuffer = VkBuffer.Ptr.allocate(arena);
+            var instResult = deviceCommands.createBuffer(device, instBufferCreateInfo, null, pInstBuffer);
+            if (instResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to create inst buffer: " + VkResult.explain(instResult));
+            }
+            VkBuffer instBuffer = pInstBuffer.read();
+            
+            // Получаем memory requirements
+            var instMemReqs = VkMemoryRequirements.allocate(arena);
+            deviceCommands.getBufferMemoryRequirements(device, instBuffer, instMemReqs);
+            
+            // Выделяем память HOST_VISIBLE | HOST_COHERENT
+            var instMemAlloc = VkMemoryAllocateInfo.allocate(arena)
+                    .allocationSize(instMemReqs.size())
+                    .memoryTypeIndex(findMemoryType(instMemReqs.memoryTypeBits(), VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT));
+            var instMemAllocFlags = VkMemoryAllocateFlagsInfo.allocate(arena)
+                    .sType(VkStructureType.MEMORY_ALLOCATE_FLAGS_INFO)
+                    .flags(VkMemoryAllocateFlags.DEVICE_ADDRESS);
+            instMemAlloc.pNext(instMemAllocFlags.segment());
+            
+            var pInstDeviceMemory = VkDeviceMemory.Ptr.allocate(arena);
+            result = deviceCommands.allocateMemory(device, instMemAlloc, null, pInstDeviceMemory);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to allocate inst buffer memory: " + VkResult.explain(result));
+            }
+            
+            result = deviceCommands.bindBufferMemory(device, instBuffer, pInstDeviceMemory.read(), 0);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to bind inst buffer memory: " + VkResult.explain(result));
+            }
+            
             var ppData = PointerPtr.allocate(arena);
-            vma.mapMemory(vmaAllocator, instBuffer.second, ppData);
-            ppData.read().reinterpret(INSTANCE_SIZE).copyFrom(instanceData);
-            vma.unmapMemory(vmaAllocator, instBuffer.second);
-            long instAddress = getBufferDeviceAddress(instBuffer.first);
+            result = deviceCommands.mapMemory(device, pInstDeviceMemory.read(), 0, INSTANCE_SIZE, 0, ppData);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to map inst buffer: " + VkResult.explain(result));
+            }
+            var mappedSegment = ppData.read().reinterpret(INSTANCE_SIZE);
+            mappedSegment.copyFrom(instanceData);
+
+            // Проверяем копирование
+            long verifyInBuffer = mappedSegment.get(ValueLayout.JAVA_LONG, 56);
+            System.out.println("BLAS address in instBuffer: 0x" + Long.toHexString(verifyInBuffer));
+            
+            deviceCommands.unmapMemory(device, pInstDeviceMemory.read());
+            
+            long instAddress = getBufferDeviceAddress(instBuffer);
+
             var instancesData = VkAccelerationStructureGeometryInstancesDataKHR.allocate(arena)
                     .sType(VkStructureType.ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR);
             instancesData.data().deviceAddress(instAddress);
-            // Properly set the instances data
+
             var tlasGeometry = VkAccelerationStructureGeometryKHR.allocate(arena)
                     .sType(VkStructureType.ACCELERATION_STRUCTURE_GEOMETRY_KHR)
                     .geometryType(VkGeometryTypeKHR.INSTANCES)
-                    .flags(0);
+                    .flags(VkGeometryFlagsKHR.OPAQUE);  // OPAQUE как у Sascha!
             tlasGeometry.geometry().instances(instancesData);
+
             var tlasBuildInfo = VkAccelerationStructureBuildGeometryInfoKHR.allocate(arena)
                     .sType(VkStructureType.ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR)
                     .type(VkAccelerationStructureTypeKHR.TOP_LEVEL)
-                    .flags(VkBuildAccelerationStructureFlagsKHR.PREFER_FAST_TRACE |
-                            VkBuildAccelerationStructureFlagsKHR.ALLOW_UPDATE)
+                    .flags(VkBuildAccelerationStructureFlagsKHR.PREFER_FAST_TRACE)
                     .mode(VkBuildAccelerationStructureModeKHR.BUILD)
                     .geometryCount(1)
                     .pGeometries(tlasGeometry);
-            // Create build range info for TLAS
+
             var tlasBuildRangeInfo = VkAccelerationStructureBuildRangeInfoKHR.allocate(arena)
-                    .primitiveCount(1)  // One instance
+                    .primitiveCount(1) // 1 экземпляр в TLAS
                     .primitiveOffset(0)
                     .firstVertex(0)
                     .transformOffset(0);
+
             var ppTlasBuildRangeInfo = PointerPtr.allocate(arena);
             ppTlasBuildRangeInfo.write(tlasBuildRangeInfo);
+
             var tlasMaxPrim = IntPtr.allocate(arena, 1);
             tlasMaxPrim.write(0, 1);
             var tlasSizeInfo = VkAccelerationStructureBuildSizesInfoKHR.allocate(arena);
-            deviceCommands.getAccelerationStructureBuildSizesKHR(
-                    device, VkAccelerationStructureBuildTypeKHR.DEVICE, tlasBuildInfo, tlasMaxPrim, tlasSizeInfo);
-            // Calculate proper TLAS buffer size with alignment padding
+            deviceCommands.getAccelerationStructureBuildSizesKHR(device, VkAccelerationStructureBuildTypeKHR.DEVICE, tlasBuildInfo, tlasMaxPrim, tlasSizeInfo);
+
             long tlasSize = tlasSizeInfo.accelerationStructureSize();
             long tlasScratchSize = tlasSizeInfo.buildScratchSize();
             tlasSize = (tlasSize + MIN_PADDING - 1) & ~(MIN_PADDING - 1);
             tlasScratchSize = (tlasScratchSize + alignment - 1) & ~(alignment - 1);
-            tlasScratchSize += 4096; // Extra padding for safety
-            System.out.println("Required TLAS size: " + tlasSize + " bytes (with padding)");
-            System.out.println("Required TLAS scratch size: " + tlasScratchSize + " bytes (with padding)");
+            tlasScratchSize += 4096;
+
             var tlasResult = createAccelerationStructureBuffer((int) tlasSize);
             tlasBuffer = tlasResult.first;
-            tlasAllocation = tlasResult.second;
+            tlasBufferMemory = null;
+
             var tlasCreateInfo = VkAccelerationStructureCreateInfoKHR.allocate(arena)
                     .sType(VkStructureType.ACCELERATION_STRUCTURE_CREATE_INFO_KHR)
                     .buffer(tlasBuffer)
@@ -994,59 +1307,23 @@ public class Application {
                 throw new RuntimeException("Failed to create TLAS: " + VkResult.explain(result));
             }
             tlas = pTlas.read();
-            System.out.println("BLAS device address: " + Long.toHexString(blasAddress));
-            System.out.println("TLAS device address: " + Long.toHexString(getAccelerationStructureDeviceAddress(tlas)));
-            System.out.println("TLAS created successfully");
-            // Add these debug logs after TLAS build:
-            validateAccelerationStructures();
-            System.out.println("Raygen SBT address: 0x" + Long.toHexString(raygenAddress));
-            // Submit TLAS build
-            var cmd2 = beginSingleTimeCommands();
 
-            // ADD THE BARRIER HERE - at the beginning of the TLAS command buffer
-            var memoryBarrier = VkMemoryBarrier.allocate(arena)
-                    .sType(VkStructureType.MEMORY_BARRIER)
-                    .srcAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_WRITE_KHR)
-                    .dstAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_READ_KHR);
-
-            deviceCommands.cmdPipelineBarrier(cmd2,
-                    VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR,
-                    VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR,
-                    VkDependencyFlags.BY_REGION,
-                    1, memoryBarrier,
-                    0, null,
-                    0, null);
-
+            // Build TLAS
             var scratchBuffer2 = createScratchBuffer((int) tlasScratchSize);
             long scratchAddressTlas = getBufferDeviceAddress(scratchBuffer2.first);
             long alignedScratchAddressTlas = (scratchAddressTlas + alignment - 1) & ~(alignment - 1);
             tlasBuildInfo.scratchData().deviceAddress(alignedScratchAddressTlas);
             tlasBuildInfo.dstAccelerationStructure(tlas);
+            
+            var cmd2 = beginSingleTimeCommands();
             deviceCommands.cmdBuildAccelerationStructuresKHR(cmd2, 1, tlasBuildInfo, ppTlasBuildRangeInfo);
-            // AMD-SPECIFIC MEMORY BARRIERS for TLAS
-            var fullBarrier = VkMemoryBarrier.allocate(arena)
-                    .sType(VkStructureType.MEMORY_BARRIER)
-                    .srcAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_WRITE_KHR |
-                            VkAccessFlags.ACCELERATION_STRUCTURE_READ_KHR |
-                            VkAccessFlags.SHADER_WRITE)
-                    .dstAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_READ_KHR |
-                            VkAccessFlags.SHADER_READ |
-                            VkAccessFlags.SHADER_WRITE);
-            deviceCommands.cmdPipelineBarrier(cmd2,
-                    VkPipelineStageFlags.ALL_COMMANDS,
-                    VkPipelineStageFlags.ALL_COMMANDS,
-                    VkDependencyFlags.BY_REGION,
-                    1, fullBarrier, 0, null, 0, null);
             endSingleTimeCommands(cmd2);
-            // FINAL AMD-SPECIFIC SYNCHRONIZATION
-            fenceSync();
-            // Cleanup resources
-            vma.destroyBuffer(vmaAllocator, scratchBuffer2.first, scratchBuffer2.second);
-            vma.destroyBuffer(vmaAllocator, instBuffer.first, instBuffer.second);
+            
+            deviceCommands.destroyBuffer(device, scratchBuffer2.first, null);
+            deviceCommands.destroyBuffer(device, instBuffer, null);
         }
     }
 
-    // Helper method for explicit AMD synchronization
     private void fenceSync() {
         try (var arena = Arena.ofConfined()) {
             var fenceInfo = VkFenceCreateInfo.allocate(arena);
@@ -1073,7 +1350,6 @@ public class Application {
 
     private void createOutputImage() {
         try (var arena = Arena.ofConfined()) {
-            // Safety check for invalid dimensions
             int width = Math.max(1, swapChainExtent.width());
             int height = Math.max(1, swapChainExtent.height());
             var info = VkImageCreateInfo.allocate(arena)
@@ -1084,10 +1360,8 @@ public class Application {
                     .arrayLayers(1)
                     .samples(VkSampleCountFlags._1)
                     .tiling(VkImageTiling.OPTIMAL)
-                    .usage(VkImageUsageFlags.STORAGE |
-                            VkImageUsageFlags.TRANSFER_SRC |
-                            VkImageUsageFlags.TRANSFER_DST); // Add TRANSFER_DST
-
+                    .usage(VkImageUsageFlags.STORAGE | VkImageUsageFlags.TRANSFER_SRC | VkImageUsageFlags.TRANSFER_DST)
+                    .initialLayout(VkImageLayout.UNDEFINED);
             var allocInfo = VmaAllocationCreateInfo.allocate(arena).usage(VmaMemoryUsage.GPU_ONLY);
             var pImage = VkImage.Ptr.allocate(arena);
             var pAlloc = VmaAllocation.Ptr.allocate(arena);
@@ -1097,31 +1371,82 @@ public class Application {
             }
             outputImage = pImage.read();
             outputImageAllocation = pAlloc.read();
-
-            // Create image view IMMEDIATELY after image creation
             outputImageView = createImageView(outputImage, VkFormat.R8G8B8A8_UNORM, VkImageAspectFlags.COLOR, 1);
-
+            
             System.out.println("Output image and view created successfully");
-            System.out.println("Output image view pointer: " + outputImageView);
+        }
+    }
+
+    private void transitionOutputImageToGeneral() {
+        try (var arena = Arena.ofConfined()) {
+            // Создаем временный command pool и buffer
+            var indices = findQueueFamilies(physicalDevice);
+            var poolInfo = VkCommandPoolCreateInfo.allocate(arena)
+                    .queueFamilyIndex(indices.graphicsFamily())
+                    .flags(VkCommandPoolCreateFlags.TRANSIENT);
+            var pPool = VkCommandPool.Ptr.allocate(arena);
+            var result = deviceCommands.createCommandPool(device, poolInfo, null, pPool);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to create transient command pool: " + VkResult.explain(result));
+            }
+            VkCommandPool cmdPool = pPool.read();
+            
+            var allocInfo = VkCommandBufferAllocateInfo.allocate(arena)
+                    .commandPool(cmdPool)
+                    .level(VkCommandBufferLevel.PRIMARY)
+                    .commandBufferCount(1);
+            var pBuf = VkCommandBuffer.Ptr.allocate(arena);
+            result = deviceCommands.allocateCommandBuffers(device, allocInfo, pBuf);
+            if (result != VkResult.SUCCESS) {
+                deviceCommands.destroyCommandPool(device, cmdPool, null);
+                throw new RuntimeException("Failed to allocate command buffer: " + VkResult.explain(result));
+            }
+            VkCommandBuffer cmd = pBuf.read();
+            
+            var barrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.UNDEFINED)
+                    .newLayout(VkImageLayout.GENERAL)
+                    .srcAccessMask(0)
+                    .dstAccessMask(0)
+                    .image(outputImage)
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            
+            var beginInfo = VkCommandBufferBeginInfo.allocate(arena)
+                    .flags(VkCommandBufferUsageFlags.ONE_TIME_SUBMIT);
+            deviceCommands.beginCommandBuffer(cmd, beginInfo);
+            deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TOP_OF_PIPE, VkPipelineStageFlags.FRAGMENT_SHADER, 0, 0, null, 0, null, 1, barrier);
+            deviceCommands.endCommandBuffer(cmd);
+            
+            var fenceInfo = VkFenceCreateInfo.allocate(arena);
+            var pFence = VkFence.Ptr.allocate(arena);
+            deviceCommands.createFence(device, fenceInfo, null, pFence);
+            
+            var submitInfo = VkSubmitInfo.allocate(arena)
+                    .commandBufferCount(1)
+                    .pCommandBuffers(VkCommandBuffer.Ptr.allocateV(arena, cmd));
+            result = deviceCommands.queueSubmit(graphicsQueue, 1, submitInfo, pFence.read());
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to submit transition command buffer: " + VkResult.explain(result));
+            }
+            
+            result = deviceCommands.waitForFences(device, 1, pFence, VkConstants.TRUE, UINT64_MAX);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to wait for fence: " + VkResult.explain(result));
+            }
+            
+            deviceCommands.destroyFence(device, pFence.read(), null);
+            deviceCommands.freeCommandBuffers(device, cmdPool, 1, VkCommandBuffer.Ptr.allocateV(arena, cmd));
+            deviceCommands.destroyCommandPool(device, cmdPool, null);
         }
     }
 
     private void createDescriptorSetLayout() {
         try (var arena = Arena.ofConfined()) {
             var bindings = VkDescriptorSetLayoutBinding.allocate(arena, 2)
-                    .at(0, b -> b
-                            .binding(0)
-                            .descriptorType(VkDescriptorType.STORAGE_IMAGE)
-                            .descriptorCount(1)
-                            .stageFlags(VkShaderStageFlags.RAYGEN_KHR))
-                    .at(1, b -> b
-                            .binding(1)
-                            .descriptorType(VkDescriptorType.ACCELERATION_STRUCTURE_KHR)
-                            .descriptorCount(1)
-                            .stageFlags(VkShaderStageFlags.RAYGEN_KHR | VkShaderStageFlags.CLOSEST_HIT_KHR));
-            var layoutInfo = VkDescriptorSetLayoutCreateInfo.allocate(arena)
-                    .bindingCount(2)
-                    .pBindings(bindings);
+                    .at(0, b -> b.binding(0).descriptorType(VkDescriptorType.STORAGE_IMAGE).descriptorCount(1).stageFlags(VkShaderStageFlags.RAYGEN_KHR | VkShaderStageFlags.CLOSEST_HIT_KHR))
+                    .at(1, b -> b.binding(1).descriptorType(VkDescriptorType.ACCELERATION_STRUCTURE_KHR).descriptorCount(1).stageFlags(VkShaderStageFlags.RAYGEN_KHR | VkShaderStageFlags.CLOSEST_HIT_KHR));
+            var layoutInfo = VkDescriptorSetLayoutCreateInfo.allocate(arena).bindingCount(2).pBindings(bindings);
             var pLayout = VkDescriptorSetLayout.Ptr.allocate(arena);
             var result = deviceCommands.createDescriptorSetLayout(device, layoutInfo, null, pLayout);
             if (result != VkResult.SUCCESS) {
@@ -1136,10 +1461,7 @@ public class Application {
             var sizes = VkDescriptorPoolSize.allocate(arena, 2)
                     .at(0, s -> s.type(VkDescriptorType.STORAGE_IMAGE).descriptorCount(MAX_FRAMES_IN_FLIGHT * 2))
                     .at(1, s -> s.type(VkDescriptorType.ACCELERATION_STRUCTURE_KHR).descriptorCount(MAX_FRAMES_IN_FLIGHT * 2));
-            var poolInfo = VkDescriptorPoolCreateInfo.allocate(arena)
-                    .poolSizeCount(2)
-                    .pPoolSizes(sizes)
-                    .maxSets(MAX_FRAMES_IN_FLIGHT * 2);
+            var poolInfo = VkDescriptorPoolCreateInfo.allocate(arena).poolSizeCount(2).pPoolSizes(sizes).maxSets(MAX_FRAMES_IN_FLIGHT * 2);
             var pPool = VkDescriptorPool.Ptr.allocate(arena);
             var result = deviceCommands.createDescriptorPool(device, poolInfo, null, pPool);
             if (result != VkResult.SUCCESS) {
@@ -1161,33 +1483,20 @@ public class Application {
                 throw new RuntimeException("Failed to allocate descriptor set: " + VkResult.explain(result));
             }
             descriptorSet = pSet.read();
-            var imageInfo = VkDescriptorImageInfo.allocate(arena)
-                    .imageView(outputImageView)
-                    .imageLayout(VkImageLayout.GENERAL);
+            var imageInfo = VkDescriptorImageInfo.allocate(arena).imageView(outputImageView).imageLayout(VkImageLayout.GENERAL);
             var asInfo = VkWriteDescriptorSetAccelerationStructureKHR.allocate(arena)
                     .sType(VkStructureType.WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR)
                     .accelerationStructureCount(1)
                     .pAccelerationStructures(VkAccelerationStructureKHR.Ptr.allocateV(arena, tlas));
             var writes = VkWriteDescriptorSet.allocate(arena, 2)
-                    .at(0, w -> w
-                            .dstSet(descriptorSet)
-                            .dstBinding(0)
-                            .descriptorType(VkDescriptorType.STORAGE_IMAGE)
-                            .descriptorCount(1)
-                            .pImageInfo(imageInfo))
-                    .at(1, w -> w
-                            .dstSet(descriptorSet)
-                            .dstBinding(1)
-                            .descriptorType(VkDescriptorType.ACCELERATION_STRUCTURE_KHR)
-                            .descriptorCount(1)
-                            .pNext(asInfo.segment()));
+                    .at(0, w -> w.dstSet(descriptorSet).dstBinding(0).descriptorType(VkDescriptorType.STORAGE_IMAGE).descriptorCount(1).pImageInfo(imageInfo))
+                    .at(1, w -> w.dstSet(descriptorSet).dstBinding(1).descriptorType(VkDescriptorType.ACCELERATION_STRUCTURE_KHR).descriptorCount(1).pNext(asInfo.segment()));
             deviceCommands.updateDescriptorSets(device, 2, writes, 0, null);
         }
     }
 
     private void createRayTracingPipeline() {
         try (var arena = Arena.ofConfined()) {
-            // Load precompiled SPIR-V
             var rgenCode = loadSpirvShader(arena, "/shader/raytracing/ray.rgen.spv");
             var rchitCode = loadSpirvShader(arena, "/shader/raytracing/ray.rchit.spv");
             var rmissCode = loadSpirvShader(arena, "/shader/raytracing/ray.rmiss.spv");
@@ -1196,25 +1505,12 @@ public class Application {
             var rmissModule = createShaderModule(rmissCode);
             var stages = VkPipelineShaderStageCreateInfo.allocate(arena, 3)
                     .at(0, s -> s.stage(VkShaderStageFlags.RAYGEN_KHR).module(rgenModule).pName(BytePtr.allocateString(arena, "main")))
-                    .at(1, s -> s.stage(VkShaderStageFlags.CLOSEST_HIT_KHR).module(rchitModule).pName(BytePtr.allocateString(arena, "main")))
-                    .at(2, s -> s.stage(VkShaderStageFlags.MISS_KHR).module(rmissModule).pName(BytePtr.allocateString(arena, "main")));
+                    .at(1, s -> s.stage(VkShaderStageFlags.MISS_KHR).module(rmissModule).pName(BytePtr.allocateString(arena, "main")))
+                    .at(2, s -> s.stage(VkShaderStageFlags.CLOSEST_HIT_KHR).module(rchitModule).pName(BytePtr.allocateString(arena, "main")));
             var groups = VkRayTracingShaderGroupCreateInfoKHR.allocate(arena, 3)
-                    .at(0, g -> g.type(VkRayTracingShaderGroupTypeKHR.GENERAL)
-                            .generalShader(0)  // Ray gen shader index
-                            .closestHitShader(VkConstants.SHADER_UNUSED_KHR)
-                            .anyHitShader(VkConstants.SHADER_UNUSED_KHR)
-                            .intersectionShader(VkConstants.SHADER_UNUSED_KHR))
-                    .at(1, g -> g.type(VkRayTracingShaderGroupTypeKHR.GENERAL)
-                            .generalShader(2)  // Miss shader index
-                            .closestHitShader(VkConstants.SHADER_UNUSED_KHR)
-                            .anyHitShader(VkConstants.SHADER_UNUSED_KHR)
-                            .intersectionShader(VkConstants.SHADER_UNUSED_KHR))
-                    .at(2, g -> g.type(VkRayTracingShaderGroupTypeKHR.TRIANGLES_HIT_GROUP)
-                            .closestHitShader(1)  // Closest hit shader index
-                            .generalShader(VkConstants.SHADER_UNUSED_KHR)
-                            .anyHitShader(VkConstants.SHADER_UNUSED_KHR)
-                            .intersectionShader(VkConstants.SHADER_UNUSED_KHR));
-            // Query ray tracing properties for SBT calculations
+                    .at(0, g -> g.type(VkRayTracingShaderGroupTypeKHR.GENERAL).generalShader(0).closestHitShader(VkConstants.SHADER_UNUSED_KHR).anyHitShader(VkConstants.SHADER_UNUSED_KHR).intersectionShader(VkConstants.SHADER_UNUSED_KHR))
+                    .at(1, g -> g.type(VkRayTracingShaderGroupTypeKHR.GENERAL).generalShader(1).closestHitShader(VkConstants.SHADER_UNUSED_KHR).anyHitShader(VkConstants.SHADER_UNUSED_KHR).intersectionShader(VkConstants.SHADER_UNUSED_KHR))
+                    .at(2, g -> g.type(VkRayTracingShaderGroupTypeKHR.TRIANGLES_HIT_GROUP).generalShader(VkConstants.SHADER_UNUSED_KHR).closestHitShader(2).anyHitShader(VkConstants.SHADER_UNUSED_KHR).intersectionShader(VkConstants.SHADER_UNUSED_KHR));
             var rtProps = VkPhysicalDeviceRayTracingPipelinePropertiesKHR.allocate(arena)
                     .sType(VkStructureType.PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR);
             var props2 = VkPhysicalDeviceProperties2.allocate(arena).pNext(rtProps.segment());
@@ -1225,14 +1521,12 @@ public class Application {
             System.out.println("Shader group handle size: " + handleSize);
             System.out.println("Shader group handle alignment: " + handleAlignment);
             System.out.println("Shader group base alignment: " + shaderGroupBaseAlignment);
-            // Calculate SBT record size with AMD-specific requirements
-            sbtRecordSize = Math.max(handleSize, 32);
-            sbtRecordSize = ((sbtRecordSize + shaderGroupBaseAlignment - 1) / shaderGroupBaseAlignment) * shaderGroupBaseAlignment;
-            sbtRecordSize = Math.max(sbtRecordSize, 128); // CRITICAL: AMD requires at least 128 bytes
+            // Используем stride=handleSize (32) как у Sascha Willems, НЕ 128!
+            sbtRecordSize = handleSize;
             var pushConstantRange = VkPushConstantRange.allocate(arena)
-                    .stageFlags(VkShaderStageFlags.RAYGEN_KHR) // Must match exactly what's used in cmdPushConstants
+                    .stageFlags(VkShaderStageFlags.RAYGEN_KHR)
                     .offset(0)
-                    .size(128); // Increased size to match what's pushed in recordCommandBuffer (32 floats * 4 bytes = 128 bytes)
+                    .size(128);
             var layoutInfo = VkPipelineLayoutCreateInfo.allocate(arena)
                     .setLayoutCount(1)
                     .pSetLayouts(VkDescriptorSetLayout.Ptr.allocateV(arena, descriptorSetLayout))
@@ -1252,7 +1546,7 @@ public class Application {
                     .groupCount(3)
                     .maxPipelineRayRecursionDepth(1)
                     .layout(pipelineLayout)
-                    .flags(VkPipelineCreateFlags.DISABLE_OPTIMIZATION);
+                    .flags(VkPipelineCreateFlags.RAY_TRACING_SHADER_GROUP_HANDLE_CAPTURE_REPLAY_KHR);
             var pPipeline = VkPipeline.Ptr.allocate(arena);
             result = deviceCommands.createRayTracingPipelinesKHR(device, null, null, 1, pipelineInfo, null, pPipeline);
             if (result != VkResult.SUCCESS) {
@@ -1298,116 +1592,118 @@ public class Application {
 
     private void createShaderBindingTable() {
         try (var arena = Arena.ofConfined()) {
-            int groupCount = 3; // rgen, miss, rchit
-
+            int groupCount = 3;
             System.out.println("Shader group handle size: " + handleSize);
             System.out.println("Shader group handle alignment: " + handleAlignment);
             System.out.println("Shader group base alignment: " + shaderGroupBaseAlignment);
-
-            // Calculate SBT record size with proper alignment
-            sbtRecordSize = Math.max(handleSize, 32);
-            sbtRecordSize = ((sbtRecordSize + shaderGroupBaseAlignment - 1) / shaderGroupBaseAlignment) * shaderGroupBaseAlignment;
-            sbtRecordSize = Math.max(sbtRecordSize, 128); // AMD minimum
-
+            
+            // Sascha Willems использует отдельные буферы для каждого SBT региона!
+            // Каждый буфер содержит ровно один handle (32 байта).
+            sbtRecordSize = handleSize;
             int handleSizeAligned = ((handleSize + handleAlignment - 1) / handleAlignment) * handleAlignment;
-            // CRITICAL FIX: Calculate total size with extra padding at the end
-            int totalSbtSize = groupCount * sbtRecordSize + shaderGroupBaseAlignment; // Extra padding for safety
 
-            // Create SBT buffer with sufficient size
-            var buffer = createBuffer(
-                    totalSbtSize,
-                    VkBufferUsageFlags.SHADER_BINDING_TABLE_KHR |
-                            VkBufferUsageFlags.SHADER_DEVICE_ADDRESS |
-                            VkBufferUsageFlags.TRANSFER_SRC,
-                    VmaAllocationCreateFlags.HOST_ACCESS_SEQUENTIAL_WRITE,
-                    VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT,
-                    null
-            );
-            sbtBuffer = buffer.first;
-            sbtAllocation = buffer.second;
+            // Получаем shader group handles
+            var handles = BytePtr.allocate(arena, groupCount * handleSizeAligned);
+            var getResult = deviceCommands.getRayTracingShaderGroupHandlesKHR(device, rayTracingPipeline, 0, groupCount, groupCount * handleSizeAligned, handles.segment());
+            if (getResult != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to get shader group handles: " + VkResult.explain(getResult));
+            }
 
-            // Get buffer device address
-            long bufferAddress = getBufferDeviceAddress(sbtBuffer);
-            System.out.println("Raw SBT Buffer Address: 0x" + Long.toHexString(bufferAddress));
-            System.out.println("Total SBT Buffer Size: " + totalSbtSize + " bytes");
-            System.out.println("Actual Buffer End Address: 0x" + Long.toHexString(bufferAddress + totalSbtSize - 1));
+            System.out.println("=== SHADER GROUP HANDLES ===");
+            for (int i = 0; i < groupCount; i++) {
+                int handle0 = handles.segment().get(ValueLayout.JAVA_INT, i * handleSizeAligned);
+                System.out.println("Group " + i + " handle (first 4 bytes): 0x" + Integer.toHexString(handle0));
+            }
 
-            // Calculate properly aligned addresses
-            raygenAddress = (bufferAddress + shaderGroupBaseAlignment - 1) & ~(shaderGroupBaseAlignment - 1);
-            missAddress = raygenAddress + sbtRecordSize;
-            hitAddress = missAddress + sbtRecordSize;
+            // Создаём ТРИ ОТДЕЛЬНЫХ буфера (как у Sascha Willems)
+            // Буфер 0: Raygen
+            raygenAddress = createSingleSbtBuffer(arena, handles.segment().asSlice(0, handleSize));
+            // Буфер 1: Miss
+            missAddress = createSingleSbtBuffer(arena, handles.segment().asSlice(handleSizeAligned, handleSize));
+            // Буфер 2: Hit
+            hitAddress = createSingleSbtBuffer(arena, handles.segment().asSlice(2 * handleSizeAligned, handleSize));
+            
             sbtDeviceAddress = raygenAddress;
 
-            // CRITICAL: Verify all addresses fit within buffer
-            long bufferEnd = bufferAddress + totalSbtSize;
-            long hitSectionEnd = hitAddress + sbtRecordSize;
+            System.out.println("=== SBT DEBUG (SEPARATE BUFFERS) ===");
+            System.out.println("Raygen address: 0x" + Long.toHexString(raygenAddress));
+            System.out.println("Miss address: 0x" + Long.toHexString(missAddress));
+            System.out.println("Hit address: 0x" + Long.toHexString(hitAddress));
+            System.out.println("Handle size: " + handleSize);
+            System.out.println("SBT record size: " + sbtRecordSize);
+        }
+    }
 
-            System.out.println("=== VERIFIED SBT ADDRESSES ===");
-            System.out.println("Buffer Range: [0x" + Long.toHexString(bufferAddress) +
-                    ", 0x" + Long.toHexString(bufferEnd - 1) + "]");
-            System.out.println("Raygen: 0x" + Long.toHexString(raygenAddress) +
-                    " (End: 0x" + Long.toHexString(raygenAddress + sbtRecordSize - 1) + ")");
-            System.out.println("Miss:   0x" + Long.toHexString(missAddress) +
-                    " (End: 0x" + Long.toHexString(missAddress + sbtRecordSize - 1) + ")");
-            System.out.println("Hit:    0x" + Long.toHexString(hitAddress) +
-                    " (End: 0x" + Long.toHexString(hitSectionEnd - 1) + ")");
+    private long createSingleSbtBuffer(Arena arena, MemorySegment handleData) {
+        int bufferSize = handleSize;
+        
+        // Создаём буфер
+        var bufferCreateInfo = VkBufferCreateInfo.allocate(arena)
+                .size(bufferSize)
+                .usage(VkBufferUsageFlags.SHADER_BINDING_TABLE_KHR | VkBufferUsageFlags.SHADER_DEVICE_ADDRESS);
 
-            if (hitSectionEnd > bufferEnd) {
-                throw new RuntimeException("CRITICAL ERROR: Hit shader section extends beyond buffer end! " +
-                        "Buffer end: 0x" + Long.toHexString(bufferEnd - 1) +
-                        ", Hit section end: 0x" + Long.toHexString(hitSectionEnd - 1));
-            }
+        var pBuffer = VkBuffer.Ptr.allocate(arena);
+        var result = deviceCommands.createBuffer(device, bufferCreateInfo, null, pBuffer);
+        if (result != VkResult.SUCCESS) {
+            throw new RuntimeException("Failed to create SBT buffer: " + VkResult.explain(result));
+        }
+        VkBuffer buffer = pBuffer.read();
 
-            // Get shader group handles
-            var handles = BytePtr.allocate(arena, groupCount * handleSizeAligned);
-            var result = deviceCommands.getRayTracingShaderGroupHandlesKHR(
-                    device, rayTracingPipeline, 0, groupCount, groupCount * handleSizeAligned, handles.segment());
+        // Получаем memory requirements
+        var memReqs = VkMemoryRequirements.allocate(arena);
+        deviceCommands.getBufferMemoryRequirements(device, buffer, memReqs);
 
-            if (result != VkResult.SUCCESS) {
-                throw new RuntimeException("Failed to get shader group handles: " + VkResult.explain(result));
-            }
+        // Выделяем память HOST_VISIBLE | HOST_COHERENT | DEVICE_ADDRESS
+        var memAlloc = VkMemoryAllocateInfo.allocate(arena)
+                .allocationSize(memReqs.size())
+                .memoryTypeIndex(findMemoryType(memReqs.memoryTypeBits(), VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT));
+        var memAllocFlags = VkMemoryAllocateFlagsInfo.allocate(arena)
+                .sType(VkStructureType.MEMORY_ALLOCATE_FLAGS_INFO)
+                .flags(VkMemoryAllocateFlags.DEVICE_ADDRESS);
+        memAlloc.pNext(memAllocFlags.segment());
 
-            // Map memory and copy handles
-            var ppData = PointerPtr.allocate(arena);
-            vma.mapMemory(vmaAllocator, sbtAllocation, ppData);
-            var pData = ppData.read().reinterpret(totalSbtSize);
+        var pDeviceMemory = VkDeviceMemory.Ptr.allocate(arena);
+        result = deviceCommands.allocateMemory(device, memAlloc, null, pDeviceMemory);
+        if (result != VkResult.SUCCESS) {
+            throw new RuntimeException("Failed to allocate SBT memory: " + VkResult.explain(result));
+        }
+        VkDeviceMemory memory = pDeviceMemory.read();
 
-            long offset = raygenAddress - bufferAddress;
+        // Bind memory
+        result = deviceCommands.bindBufferMemory(device, buffer, memory, 0);
+        if (result != VkResult.SUCCESS) {
+            throw new RuntimeException("Failed to bind SBT buffer memory: " + VkResult.explain(result));
+        }
 
-            for (int i = 0; i < groupCount; i++) {
-                long srcOffset = i * handleSizeAligned;
-                long dstOffset = offset + i * sbtRecordSize;
+        // Получаем device address
+        var info = VkBufferDeviceAddressInfo.allocate(arena)
+                .sType(VkStructureType.BUFFER_DEVICE_ADDRESS_INFO)
+                .buffer(buffer);
+        long address = deviceCommands.getBufferDeviceAddress(device, info);
 
-                // Copy handle data
-                pData.asSlice(dstOffset, handleSize).copyFrom(handles.segment().asSlice(srcOffset, handleSize));
+        // Копируем handle в буфер
+        var ppData = PointerPtr.allocate(arena);
+        result = deviceCommands.mapMemory(device, memory, 0, bufferSize, 0, ppData);
+        if (result != VkResult.SUCCESS) {
+            throw new RuntimeException("Failed to map SBT memory: " + VkResult.explain(result));
+        }
+        ppData.read().reinterpret(bufferSize).copyFrom(handleData);
+        deviceCommands.unmapMemory(device, memory);
 
-                // Zero-fill padding
-                if (sbtRecordSize > handleSize) {
-                    pData.asSlice(dstOffset + handleSize, sbtRecordSize - handleSize).fill((byte)0);
+        return address;
+    }
+
+    private int findMemoryType(int typeBits, int properties) {
+        try (var arena = Arena.ofConfined()) {
+            var memProps = VkPhysicalDeviceMemoryProperties.allocate(arena);
+            instanceCommands.getPhysicalDeviceMemoryProperties(physicalDevice, memProps);
+            for (int i = 0; i < memProps.memoryTypeCount(); i++) {
+                if ((typeBits & (1 << i)) != 0 && 
+                    (memProps.memoryTypes().at(i).propertyFlags() & properties) == properties) {
+                    return i;
                 }
             }
-
-            vma.unmapMemory(vmaAllocator, sbtAllocation);
-
-            // AMD-specific barriers
-            var cmd = beginSingleTimeCommands();
-
-            var bufferBarrier = VkBufferMemoryBarrier.allocate(arena)
-                    .sType(VkStructureType.BUFFER_MEMORY_BARRIER)
-                    .srcAccessMask(VkAccessFlags.HOST_WRITE)
-                    .dstAccessMask(VkAccessFlags.SHADER_READ)
-                    .buffer(sbtBuffer)
-                    .offset(0)
-                    .size(totalSbtSize);
-
-            deviceCommands.cmdPipelineBarrier(cmd,
-                    VkPipelineStageFlags.HOST,
-                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,
-                    0, 0, null, 1, bufferBarrier, 0, null);
-
-            endSingleTimeCommands(cmd);
-
-            System.out.println("SBT created successfully with CORRECT buffer size");
+            throw new RuntimeException("Failed to find suitable memory type");
         }
     }
 
@@ -1446,58 +1742,37 @@ public class Application {
 
     private void drawFrame() {
         try (var arena = Arena.ofConfined()) {
-            // Check if window is minimized
             if (swapChainExtent.width() == 0 || swapChainExtent.height() == 0) {
                 needsSwapchainRecreation = true;
                 return;
             }
-            // Wait for this frame's fence
-            deviceCommands.waitForFences(
-                    device, 1,
-                    VkFence.Ptr.allocateV(arena, inFlightFences[currentFrame]),
-                    VkConstants.TRUE, UINT64_MAX
-            );
-            // Acquire image
+            deviceCommands.waitForFences(device, 1, VkFence.Ptr.allocateV(arena, inFlightFences[currentFrame]), VkConstants.TRUE, UINT64_MAX);
             var pImageIndex = IntPtr.allocate(arena);
-            var result = deviceCommands.acquireNextImageKHR(
-                    device, swapChain, UINT64_MAX,
-                    imageAvailableSemaphores[currentFrame],
-                    null,
-                    pImageIndex
-            );
-            if (result == VkResult.ERROR_SURFACE_LOST_KHR ||
-                    result == VkResult.ERROR_OUT_OF_DATE_KHR ||
-                    result == VkResult.ERROR_INITIALIZATION_FAILED) {
+            var result = deviceCommands.acquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], null, pImageIndex);
+            if (result == VkResult.ERROR_SURFACE_LOST_KHR || result == VkResult.ERROR_OUT_OF_DATE_KHR || result == VkResult.ERROR_INITIALIZATION_FAILED) {
                 needsSwapchainRecreation = true;
                 return;
             } else if (result != VkResult.SUCCESS && result != VkResult.SUBOPTIMAL_KHR) {
                 throw new RuntimeException("Failed to acquire swap chain image: " + VkResult.explain(result));
             }
             int imageIndex = pImageIndex.read();
-            // Reset fence
             deviceCommands.resetFences(device, 1, VkFence.Ptr.allocateV(arena, inFlightFences[currentFrame]));
-            // Record command buffer
             var beginInfo = VkCommandBufferBeginInfo.allocate(arena);
             deviceCommands.beginCommandBuffer(commandBuffers[currentFrame], beginInfo);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
             deviceCommands.endCommandBuffer(commandBuffers[currentFrame]);
-            // Submit
             var submitInfo = VkSubmitInfo.allocate(arena)
                     .waitSemaphoreCount(1)
                     .pWaitSemaphores(VkSemaphore.Ptr.allocateV(arena, imageAvailableSemaphores[currentFrame]))
-                    .pWaitDstStageMask(IntPtr.allocateV(arena, VkPipelineStageFlags.COLOR_ATTACHMENT_OUTPUT))
+                    .pWaitDstStageMask(IntPtr.allocateV(arena, VkPipelineStageFlags.BOTTOM_OF_PIPE))
                     .commandBufferCount(1)
                     .pCommandBuffers(VkCommandBuffer.Ptr.allocateV(arena, commandBuffers[currentFrame]))
                     .signalSemaphoreCount(1)
                     .pSignalSemaphores(VkSemaphore.Ptr.allocateV(arena, renderFinishedSemaphores[currentFrame]));
-            result = deviceCommands.queueSubmit(
-                    graphicsQueue, 1, submitInfo,
-                    inFlightFences[currentFrame]
-            );
+            result = deviceCommands.queueSubmit(graphicsQueue, 1, submitInfo, inFlightFences[currentFrame]);
             if (result != VkResult.SUCCESS) {
                 throw new RuntimeException("Failed to submit draw command buffer: " + VkResult.explain(result));
             }
-            // Present
             var presentInfo = VkPresentInfoKHR.allocate(arena)
                     .waitSemaphoreCount(1)
                     .pWaitSemaphores(VkSemaphore.Ptr.allocateV(arena, renderFinishedSemaphores[currentFrame]))
@@ -1511,7 +1786,6 @@ public class Application {
             } else if (result != VkResult.SUCCESS) {
                 throw new RuntimeException("Failed to present swap chain image: " + VkResult.explain(result));
             }
-            // Advance frame
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
     }
@@ -1530,7 +1804,6 @@ public class Application {
 
     private void recordCommandBuffer(VkCommandBuffer cmd, int imageIndex) {
         try (var arena = Arena.ofConfined()) {
-            // Set up SBT regions FIRST to ensure addresses are valid
             var raygenRegion = VkStridedDeviceAddressRegionKHR.allocate(arena)
                     .deviceAddress(raygenAddress)
                     .stride(sbtRecordSize)
@@ -1547,119 +1820,105 @@ public class Application {
                     .deviceAddress(0)
                     .stride(0)
                     .size(0);
-            // Transition output image to GENERAL layout
-            var barrier = VkImageMemoryBarrier.allocate(arena)
-                    .oldLayout(VkImageLayout.UNDEFINED)
+            
+            // outputImage уже в GENERAL layout после инициализации
+            // Просто делаем barrier для synchronization
+            var rayTraceBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.GENERAL)
                     .newLayout(VkImageLayout.GENERAL)
-                    .srcAccessMask(0)
-                    .dstAccessMask(VkAccessFlags.SHADER_WRITE)
+                    .srcAccessMask(VkAccessFlags.SHADER_WRITE)  // Ждём пока закончит писать из предыдущего фрейма
+                    .dstAccessMask(VkAccessFlags.SHADER_WRITE)  // Разрешаем писать снова
                     .image(outputImage)
                     .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
-            deviceCommands.cmdPipelineBarrier(cmd,
-                    VkPipelineStageFlags.TOP_OF_PIPE,
-                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,
-                    0, 0, null, 0, null, 1, barrier);
-            // Bind resources
+            deviceCommands.cmdPipelineBarrier(cmd, 
+                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,  // srcStage
+                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,  // dstStage
+                    0, 0, null, 0, null, 1, rayTraceBarrier);
+            
             deviceCommands.cmdBindPipeline(cmd, VkPipelineBindPoint.RAY_TRACING_KHR, rayTracingPipeline);
             var pDescriptorSet = VkDescriptorSet.Ptr.allocate(arena);
             pDescriptorSet.write(descriptorSet);
-            deviceCommands.cmdBindDescriptorSets(cmd, VkPipelineBindPoint.RAY_TRACING_KHR,
-                    pipelineLayout, 0, 1, pDescriptorSet, 0, null);
-            // Calculate camera matrices with VULKAN-SPECIFIC projection
+            deviceCommands.cmdBindDescriptorSets(cmd, VkPipelineBindPoint.RAY_TRACING_KHR, pipelineLayout, 0, 1, pDescriptorSet, 0, null);
             float aspectRatio = (float)swapChainExtent.width() / (float)swapChainExtent.height();
             float fovRadians = (float)Math.toRadians(cameraFOV);
             Matrix4f projection = new Matrix4f().setPerspective(fovRadians, aspectRatio, 0.1f, 100.0f, true);
             Matrix4f view = new Matrix4f();
-            view.lookAt(
-                    new Vector3f(0.0f, 0.0f, 5.0f),  // Move camera to Z=5
-                    new Vector3f(0.0f, 0.0f, 0.0f),
-                    new Vector3f(0.0f, 1.0f, 0.0f)
-            );
+            view.lookAt(new Vector3f(0.0f, 0.0f, 5.0f), new Vector3f(0.0f, 0.0f, 0.0f), new Vector3f(0.0f, 1.0f, 0.0f));
             Matrix4f invProjection = new Matrix4f(projection).invert();
             Matrix4f invView = new Matrix4f(view).invert();
-            // Push constants (128 bytes = 32 floats)
             float[] pushConstants = new float[32];
-            invProjection.get(pushConstants, 0);  // First 16 floats = inverse projection
-            invView.get(pushConstants, 16);       // Next 16 floats = inverse view
-            // Allocate native memory and copy data correctly
+            invProjection.get(pushConstants, 0);
+            invView.get(pushConstants, 16);
             var nativeMemory = arena.allocate(ValueLayout.JAVA_FLOAT, 32);
             for (int i = 0; i < 32; i++) {
-                // CORRECT API: use set method from MemorySegment, not FloatPtr
                 nativeMemory.set(ValueLayout.JAVA_FLOAT, i * Float.BYTES, pushConstants[i]);
             }
             deviceCommands.cmdPushConstants(cmd, pipelineLayout, VkShaderStageFlags.RAYGEN_KHR, 0, 128, nativeMemory);
-            System.out.println("Output image layout: " + VkImageLayout.GENERAL);
-            System.out.println("Raygen SBT address: 0x" + Long.toHexString(raygenAddress));
-            System.out.println("Extent: " + swapChainExtent.width() + "x" + swapChainExtent.height());
-            if (swapChainExtent.width() > 0 && swapChainExtent.height() > 0) {
-                System.out.println("Ray tracing executed for frame: " + currentFrame);
-                System.out.println("Center pixel coordinates: " + (swapChainExtent.width()/2) + "," + (swapChainExtent.height()/2));
-            }
-            if (currentFrame == 0) {
-                System.out.println("Verifying TLAS contents...");
-                System.out.println("BLAS address: 0x" + Long.toHexString(getAccelerationStructureDeviceAddress(blas)));
-                System.out.println("TLAS address: 0x" + Long.toHexString(getAccelerationStructureDeviceAddress(tlas)));
-            }
-            // Execute ray tracing
-            deviceCommands.cmdTraceRaysKHR(cmd, raygenRegion, missRegion, hitRegion, callableRegion,
-                    swapChainExtent.width(), swapChainExtent.height(), 1);
-            // CRITICAL AMD BARRIER: After ray tracing, before copying to swapchain
-            deviceCommands.cmdPipelineBarrier(cmd,
-                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,
-                    VkPipelineStageFlags.TRANSFER,
-                    VkDependencyFlags.BY_REGION,
-                    1, VkMemoryBarrier.allocate(arena)
-                            .sType(VkStructureType.MEMORY_BARRIER)
-                            .srcAccessMask(VkAccessFlags.SHADER_WRITE)
-                            .dstAccessMask(VkAccessFlags.TRANSFER_READ),
-                    0, null,
-                    1, VkImageMemoryBarrier.allocate(arena)
-                            .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
-                            .srcAccessMask(VkAccessFlags.SHADER_WRITE)
-                            .dstAccessMask(VkAccessFlags.TRANSFER_READ)
-                            .oldLayout(VkImageLayout.GENERAL)
-                            .newLayout(VkImageLayout.TRANSFER_SRC_OPTIMAL)
-                            .image(outputImage)
-                            .subresourceRange(r -> r
-                                    .aspectMask(VkImageAspectFlags.COLOR)
-                                    .levelCount(1)
-                                    .layerCount(1))
-            );
-            // Prepare swapchain image for transfer
-            barrier.oldLayout(VkImageLayout.UNDEFINED)
+            
+            System.out.println("=== TRACE RAYS DEBUG ===");
+            System.out.println("Raygen region: addr=0x" + Long.toHexString(raygenAddress) + ", stride=" + sbtRecordSize + ", size=" + sbtRecordSize);
+            System.out.println("Miss region: addr=0x" + Long.toHexString(missAddress) + ", stride=" + sbtRecordSize + ", size=" + sbtRecordSize);
+            System.out.println("Hit region: addr=0x" + Long.toHexString(hitAddress) + ", stride=" + sbtRecordSize + ", size=" + sbtRecordSize);
+            System.out.println("Launch size: " + swapChainExtent.width() + "x" + swapChainExtent.height());
+            
+            deviceCommands.cmdTraceRaysKHR(cmd, raygenRegion, missRegion, hitRegion, callableRegion, swapChainExtent.width(), swapChainExtent.height(), 1);
+            
+            // Barrier 2: outputImage GENERAL → TRANSFER_SRC для копирования
+            var transferBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.GENERAL)
+                    .newLayout(VkImageLayout.TRANSFER_SRC_OPTIMAL)
+                    .srcAccessMask(VkAccessFlags.SHADER_WRITE)
+                    .dstAccessMask(VkAccessFlags.TRANSFER_READ)
+                    .image(outputImage)
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.RAY_TRACING_SHADER_KHR, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, transferBarrier);
+            
+            // Barrier 3: swapchain image UNDEFINED → TRANSFER_DST
+            var swapchainBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.UNDEFINED)
                     .newLayout(VkImageLayout.TRANSFER_DST_OPTIMAL)
                     .srcAccessMask(0)
                     .dstAccessMask(VkAccessFlags.TRANSFER_WRITE)
                     .image(swapChainImages.read(imageIndex))
                     .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
-            deviceCommands.cmdPipelineBarrier(cmd,
-                    VkPipelineStageFlags.TOP_OF_PIPE,
-                    VkPipelineStageFlags.TRANSFER,
-                    0, 0, null, 0, null, 1, barrier);
-            // Copy ray traced result to swapchain
+            deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TOP_OF_PIPE, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, swapchainBarrier);
+            
+            // Copy output image to swapchain
             var copy = VkImageCopy.allocate(arena)
                     .srcSubresource(s -> s.aspectMask(VkImageAspectFlags.COLOR).layerCount(1))
                     .dstSubresource(s -> s.aspectMask(VkImageAspectFlags.COLOR).layerCount(1))
                     .extent(e -> e.width(swapChainExtent.width()).height(swapChainExtent.height()).depth(1));
-            deviceCommands.cmdCopyImage(cmd,
-                    outputImage, VkImageLayout.TRANSFER_SRC_OPTIMAL,
-                    swapChainImages.read(imageIndex), VkImageLayout.TRANSFER_DST_OPTIMAL,
-                    1, copy);
-            // Final barrier for presentation
-            barrier.oldLayout(VkImageLayout.TRANSFER_DST_OPTIMAL)
+            deviceCommands.cmdCopyImage(cmd, outputImage, VkImageLayout.TRANSFER_SRC_OPTIMAL, swapChainImages.read(imageIndex), VkImageLayout.TRANSFER_DST_OPTIMAL, 1, copy);
+
+            // Barrier 4: swapchain image TRANSFER_DST → PRESENT_SRC
+            var presentBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.TRANSFER_DST_OPTIMAL)
                     .newLayout(VkImageLayout.PRESENT_SRC_KHR)
                     .srcAccessMask(VkAccessFlags.TRANSFER_WRITE)
-                    .dstAccessMask(0);
-            deviceCommands.cmdPipelineBarrier(cmd,
-                    VkPipelineStageFlags.TRANSFER,
-                    VkPipelineStageFlags.BOTTOM_OF_PIPE,
-                    0, 0, null, 0, null, 1, barrier);
+                    .dstAccessMask(0)
+                    .image(swapChainImages.read(imageIndex))
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TRANSFER, VkPipelineStageFlags.BOTTOM_OF_PIPE, 0, 0, null, 0, null, 1, presentBarrier);
+            
+            // Barrier 5: outputImage TRANSFER_SRC → GENERAL для следующего фрейма
+            var outputBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.TRANSFER_SRC_OPTIMAL)
+                    .newLayout(VkImageLayout.GENERAL)
+                    .srcAccessMask(VkAccessFlags.TRANSFER_READ)
+                    .dstAccessMask(VkAccessFlags.SHADER_WRITE)
+                    .image(outputImage)
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TRANSFER, VkPipelineStageFlags.RAY_TRACING_SHADER_KHR, 0, 0, null, 0, null, 1, outputBarrier);
         }
     }
 
     private VkCommandBuffer beginSingleTimeCommands() {
         try (var arena = Arena.ofConfined()) {
-            // Create transient command pool
             var indices = findQueueFamilies(physicalDevice);
             var poolInfo = VkCommandPoolCreateInfo.allocate(arena)
                     .queueFamilyIndex(indices.graphicsFamily())
@@ -1670,7 +1929,6 @@ public class Application {
                 throw new RuntimeException("Failed to create transient command pool: " + VkResult.explain(result));
             }
             VkCommandPool cmdPool = pPool.read();
-            // Allocate command buffer
             var allocInfo = VkCommandBufferAllocateInfo.allocate(arena)
                     .commandPool(cmdPool)
                     .level(VkCommandBufferLevel.PRIMARY)
@@ -1682,9 +1940,7 @@ public class Application {
                 throw new RuntimeException("Failed to allocate command buffer: " + VkResult.explain(result));
             }
             VkCommandBuffer cmd = pBuf.read();
-            // Begin recording
-            var beginInfo = VkCommandBufferBeginInfo.allocate(arena)
-                    .flags(VkCommandBufferUsageFlags.ONE_TIME_SUBMIT);
+            var beginInfo = VkCommandBufferBeginInfo.allocate(arena).flags(VkCommandBufferUsageFlags.ONE_TIME_SUBMIT);
             result = deviceCommands.beginCommandBuffer(cmd, beginInfo);
             if (result != VkResult.SUCCESS) {
                 deviceCommands.destroyCommandPool(device, cmdPool, null);
@@ -1698,9 +1954,7 @@ public class Application {
     private void endSingleTimeCommands(VkCommandBuffer cmd) {
         try (var arena = Arena.ofConfined()) {
             deviceCommands.endCommandBuffer(cmd);
-            var submitInfo = VkSubmitInfo.allocate(arena)
-                    .commandBufferCount(1)
-                    .pCommandBuffers(VkCommandBuffer.Ptr.allocateV(arena, cmd));
+            var submitInfo = VkSubmitInfo.allocate(arena).commandBufferCount(1).pCommandBuffers(VkCommandBuffer.Ptr.allocateV(arena, cmd));
             var fenceInfo = VkFenceCreateInfo.allocate(arena);
             var pFence = VkFence.Ptr.allocate(arena);
             var result = deviceCommands.createFence(device, fenceInfo, null, pFence);
@@ -1717,7 +1971,6 @@ public class Application {
                 throw new RuntimeException("Failed to wait for fence: " + VkResult.explain(result));
             }
             deviceCommands.destroyFence(device, pFence.read(), null);
-            // Clean up
             if (transientCommandPool != null) {
                 deviceCommands.freeCommandBuffers(device, transientCommandPool, 1, VkCommandBuffer.Ptr.allocateV(arena, cmd));
                 deviceCommands.destroyCommandPool(device, transientCommandPool, null);
@@ -1739,7 +1992,6 @@ public class Application {
             }
         }
         deviceCommands.deviceWaitIdle(device);
-        // Reset command buffers before recreating swapchain
         if (commandPool != null) {
             deviceCommands.resetCommandPool(device, commandPool, 0);
         }
@@ -1748,11 +2000,9 @@ public class Application {
             createSwapchain();
             createImageViews();
             createOutputImage();
-            // Recreate descriptor pool and set
             recreateDescriptorPool();
             createDescriptorSet();
-            System.out.println("Swapchain successfully recreated with dimensions: " +
-                    swapChainExtent.width() + "x" + swapChainExtent.height());
+            System.out.println("Swapchain successfully recreated with dimensions: " + swapChainExtent.width() + "x" + swapChainExtent.height());
         } catch (RuntimeException e) {
             System.err.println("Failed to recreate swapchain: " + e.getMessage());
             needsSwapchainRecreation = true;
@@ -1760,7 +2010,6 @@ public class Application {
     }
 
     private void cleanupSwapChain() {
-        // Destroy image views first
         if (swapChainImageViews != null) {
             for (long i = 0; i < swapChainImageViews.size(); i++) {
                 if (swapChainImageViews.read(i) != null) {
@@ -1769,7 +2018,6 @@ public class Application {
             }
             swapChainImageViews = null;
         }
-        // Destroy output image resources
         if (outputImageView != null) {
             deviceCommands.destroyImageView(device, outputImageView, null);
             outputImageView = null;
@@ -1779,7 +2027,6 @@ public class Application {
             outputImage = null;
             outputImageAllocation = null;
         }
-        // Destroy swap chain last
         if (swapChain != null) {
             deviceCommands.destroySwapchainKHR(device, swapChain, null);
             swapChain = null;
@@ -1787,20 +2034,15 @@ public class Application {
     }
 
     private void recreateDescriptorPool() {
-        // Cleanup old descriptor pool
         if (descriptorPool != null) {
             deviceCommands.destroyDescriptorPool(device, descriptorPool, null);
             descriptorPool = null;
         }
-        // Create new descriptor pool
         try (var arena = Arena.ofConfined()) {
             var sizes = VkDescriptorPoolSize.allocate(arena, 2)
                     .at(0, s -> s.type(VkDescriptorType.STORAGE_IMAGE).descriptorCount(MAX_FRAMES_IN_FLIGHT * 2))
                     .at(1, s -> s.type(VkDescriptorType.ACCELERATION_STRUCTURE_KHR).descriptorCount(MAX_FRAMES_IN_FLIGHT * 2));
-            var poolInfo = VkDescriptorPoolCreateInfo.allocate(arena)
-                    .poolSizeCount(2)
-                    .pPoolSizes(sizes)
-                    .maxSets(MAX_FRAMES_IN_FLIGHT * 2);
+            var poolInfo = VkDescriptorPoolCreateInfo.allocate(arena).poolSizeCount(2).pPoolSizes(sizes).maxSets(MAX_FRAMES_IN_FLIGHT * 2);
             var pPool = VkDescriptorPool.Ptr.allocate(arena);
             var result = deviceCommands.createDescriptorPool(device, poolInfo, null, pPool);
             if (result != VkResult.SUCCESS) {
@@ -1810,20 +2052,6 @@ public class Application {
         }
     }
 
-    private void validateAccelerationStructures() {
-        try (var arena = Arena.ofConfined()) {
-            // Query acceleration structure device addresses
-            long blasAddress = getAccelerationStructureDeviceAddress(blas);
-            long tlasAddress = getAccelerationStructureDeviceAddress(tlas);
-            long vertexBufferAddress = getBufferDeviceAddress(vertexBuffer);
-            System.out.println("=== ACCELERATION STRUCTURE VALIDATION ===");
-            System.out.println("BLAS device address: 0x" + Long.toHexString(blasAddress));
-            System.out.println("TLAS device address: 0x" + Long.toHexString(tlasAddress));
-            System.out.println("Vertex buffer address: 0x" + Long.toHexString(vertexBufferAddress));
-        }
-    }
-
-    // Utility methods
     private PointerPtr getRequiredExtensions(Arena arena) {
         try (var localArena = Arena.ofConfined()) {
             var pGLFWExtensionCount = IntPtr.allocate(localArena);
@@ -1834,9 +2062,9 @@ public class Application {
             var glfwExtensionCount = pGLFWExtensionCount.read();
             glfwExtensions = glfwExtensions.reinterpret(glfwExtensionCount);
             PointerPtr extensions;
-            int count = glfwExtensionCount + 1; // +1 for KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2
+            int count = glfwExtensionCount + 1;
             if (ENABLE_VALIDATION_LAYERS) {
-                count += 1; // +1 for EXT_DEBUG_UTILS if validation is enabled
+                count += 1;
             }
             extensions = PointerPtr.allocate(arena, count);
             for (int i = 0; i < glfwExtensionCount; i++) {
