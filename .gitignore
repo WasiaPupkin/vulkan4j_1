@@ -47,6 +47,7 @@ build/
 *.ilk
 *.exp
 *.obj
+*.spv
 !modules/tutorial/src/main/resources/model/viking_room.obj
 
 # Assembly plugin produced files
