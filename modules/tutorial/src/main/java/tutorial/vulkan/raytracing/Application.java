@@ -68,7 +68,6 @@ public class Application {
     private static final int PUSH_CONSTANT_SIZE_BYTES = 128;
     private static final int MATRIX4F_FLOAT_COUNT = 16;
     private static final int SBT_REGION_PADDING = 4096;
-    private static final int MINIMIZED_SLEEP_MS = 16;
 
     // GPU Vendor IDs
     private static final int VENDOR_ID_AMD = 0x1002;
@@ -109,6 +108,7 @@ public class Application {
     private @EnumType(VkFormat.class) int swapChainImageFormat;
     private VkExtent2D swapChainExtent;
     private VkImageView.Ptr swapChainImageViews;
+    private Arena swapchainArena = Arena.ofShared();
 
     // Ray tracing resources
     private VkBuffer vertexBuffer;
@@ -129,7 +129,6 @@ public class Application {
     private VkDescriptorSet descriptorSet;
     private VkBuffer sbtBuffer;
     private VmaAllocation sbtAllocation;
-    private VkBuffer instBuffer;
 
     // Sync
     private VkSemaphore[] imageAvailableSemaphores;
@@ -210,20 +209,20 @@ public class Application {
     private void mainLoop() {
         while (glfw.windowShouldClose(window) == GLFW.FALSE) {
             glfw.pollEvents();
+            if (needsSwapchainRecreation) {
+                recreateSwapChain();
+                needsSwapchainRecreation = false;
+                continue;
+            }
+            if (swapChainExtent.width() <= 0 || swapChainExtent.height() <= 0) {
+                glfw.waitEvents();
+                handleMinimizedWindow();
+                continue;
+            }
             try {
-                if (needsSwapchainRecreation) {
-                    recreateSwapChain();
-                    needsSwapchainRecreation = false;
-                    continue;
-                }
-                if (swapChainExtent.width() <= 0 || swapChainExtent.height() <= 0) {
-                    handleMinimizedWindow();
-                    try { Thread.sleep(MINIMIZED_SLEEP_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-                    continue;
-                }
                 drawFrame();
-            } catch (Exception e) {
-                System.err.println("Error in render loop: " + e.getMessage());
+            } catch (RuntimeException e) {
+                System.err.println("Render error: %s".formatted(e.getMessage()));
                 needsSwapchainRecreation = true;
             }
         }
@@ -295,8 +294,7 @@ public class Application {
             tlasBufferMemory = null;
         }
 
-        // 7. instBuffer is already destroyed inside createAccelerationStructures()
-        instBuffer = null;
+        // 7. instBuffer is already destroyed inside createAndBuildTlas()
 
         // 8. Vertex buffer
         if (vertexBuffer != null) {
@@ -532,7 +530,9 @@ public class Application {
 
     private void createLogicalDevice() {
         var indices = findQueueFamilies(physicalDevice);
-        assert indices != null;
+        if (indices == null) {
+            throw new IllegalStateException("No suitable queue family indices found");
+        }
         try (var arena = Arena.ofConfined()) {
             var priorities = FloatPtr.allocateV(arena, 1.0f);
             var queueInfo = VkDeviceQueueCreateInfo.allocate(arena)
@@ -674,10 +674,10 @@ public class Application {
             var pCount = IntPtr.allocate(arena);
             deviceCommands.getSwapchainImagesKHR(device, swapChain, pCount, null);
             var count = pCount.read();
-            swapChainImages = VkImage.Ptr.allocate(Arena.ofAuto(), count);
+            swapChainImages = VkImage.Ptr.allocate(swapchainArena, count);
             deviceCommands.getSwapchainImagesKHR(device, swapChain, pCount, swapChainImages);
             swapChainImageFormat = format.format();
-            swapChainExtent = VkExtent2D.clone(Arena.ofAuto(), extent);
+            swapChainExtent = VkExtent2D.clone(swapchainArena, extent);
         }
     }
 
@@ -733,7 +733,7 @@ public class Application {
     }
 
     private void createImageViews() {
-        swapChainImageViews = VkImageView.Ptr.allocate(Arena.ofAuto(), swapChainImages.size());
+        swapChainImageViews = VkImageView.Ptr.allocate(swapchainArena, swapChainImages.size());
         for (long i = 0; i < swapChainImages.size(); i++) {
             swapChainImageViews.write(i, createImageView(
                     swapChainImages.read(i), swapChainImageFormat, VkImageAspectFlags.COLOR, 1));
@@ -1629,6 +1629,21 @@ public class Application {
         }
     }
 
+    /**
+     * Creates an image memory barrier for layout transition and access synchronization.
+     */
+    private VkImageMemoryBarrier createImageBarrier(Arena arena, VkImage image,
+            int oldLayout, int newLayout, int srcAccessMask, int dstAccessMask) {
+        return VkImageMemoryBarrier.allocate(arena)
+                .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                .oldLayout(oldLayout)
+                .newLayout(newLayout)
+                .srcAccessMask(srcAccessMask)
+                .dstAccessMask(dstAccessMask)
+                .image(image)
+                .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+    }
+
     private void recordCommandBuffer(VkCommandBuffer cmd, int imageIndex) {
         try (var arena = Arena.ofConfined()) {
             var raygenRegion = VkStridedDeviceAddressRegionKHR.allocate(arena)
@@ -1650,17 +1665,12 @@ public class Application {
             
             // outputImage is already in GENERAL layout after initialization
             // Just add barrier for synchronization
-            var rayTraceBarrier = VkImageMemoryBarrier.allocate(arena)
-                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VkImageLayout.GENERAL)
-                    .newLayout(VkImageLayout.GENERAL)
-                    .srcAccessMask(VkAccessFlags.SHADER_WRITE)  // Wait for writes from previous frame
-                    .dstAccessMask(VkAccessFlags.SHADER_WRITE)  // Allow writing again
-                    .image(outputImage)
-                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
-            deviceCommands.cmdPipelineBarrier(cmd, 
-                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,  // srcStage
-                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,  // dstStage
+            var rayTraceBarrier = createImageBarrier(arena, outputImage,
+                    VkImageLayout.GENERAL, VkImageLayout.GENERAL,
+                    VkAccessFlags.SHADER_WRITE, VkAccessFlags.SHADER_WRITE);
+            deviceCommands.cmdPipelineBarrier(cmd,
+                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,
+                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,
                     0, 0, null, 0, null, 1, rayTraceBarrier);
             
             deviceCommands.cmdBindPipeline(cmd, VkPipelineBindPoint.RAY_TRACING_KHR, rayTracingPipeline);
@@ -1685,25 +1695,15 @@ public class Application {
             deviceCommands.cmdTraceRaysKHR(cmd, raygenRegion, missRegion, hitRegion, callableRegion, swapChainExtent.width(), swapChainExtent.height(), 1);
             
             // Barrier 2: outputImage GENERAL → TRANSFER_SRC for copying
-            var transferBarrier = VkImageMemoryBarrier.allocate(arena)
-                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VkImageLayout.GENERAL)
-                    .newLayout(VkImageLayout.TRANSFER_SRC_OPTIMAL)
-                    .srcAccessMask(VkAccessFlags.SHADER_WRITE)
-                    .dstAccessMask(VkAccessFlags.TRANSFER_READ)
-                    .image(outputImage)
-                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            var transferBarrier = createImageBarrier(arena, outputImage,
+                    VkImageLayout.GENERAL, VkImageLayout.TRANSFER_SRC_OPTIMAL,
+                    VkAccessFlags.SHADER_WRITE, VkAccessFlags.TRANSFER_READ);
             deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.RAY_TRACING_SHADER_KHR, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, transferBarrier);
-            
+
             // Barrier 3: swapchain image UNDEFINED → TRANSFER_DST
-            var swapchainBarrier = VkImageMemoryBarrier.allocate(arena)
-                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VkImageLayout.UNDEFINED)
-                    .newLayout(VkImageLayout.TRANSFER_DST_OPTIMAL)
-                    .srcAccessMask(0)
-                    .dstAccessMask(VkAccessFlags.TRANSFER_WRITE)
-                    .image(swapChainImages.read(imageIndex))
-                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            var swapchainBarrier = createImageBarrier(arena, swapChainImages.read(imageIndex),
+                    VkImageLayout.UNDEFINED, VkImageLayout.TRANSFER_DST_OPTIMAL,
+                    0, VkAccessFlags.TRANSFER_WRITE);
             deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TOP_OF_PIPE, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, swapchainBarrier);
             
             // Copy output image to swapchain
@@ -1714,25 +1714,15 @@ public class Application {
             deviceCommands.cmdCopyImage(cmd, outputImage, VkImageLayout.TRANSFER_SRC_OPTIMAL, swapChainImages.read(imageIndex), VkImageLayout.TRANSFER_DST_OPTIMAL, 1, copy);
 
             // Barrier 4: swapchain image TRANSFER_DST → PRESENT_SRC
-            var presentBarrier = VkImageMemoryBarrier.allocate(arena)
-                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VkImageLayout.TRANSFER_DST_OPTIMAL)
-                    .newLayout(VkImageLayout.PRESENT_SRC_KHR)
-                    .srcAccessMask(VkAccessFlags.TRANSFER_WRITE)
-                    .dstAccessMask(0)
-                    .image(swapChainImages.read(imageIndex))
-                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            var presentBarrier = createImageBarrier(arena, swapChainImages.read(imageIndex),
+                    VkImageLayout.TRANSFER_DST_OPTIMAL, VkImageLayout.PRESENT_SRC_KHR,
+                    VkAccessFlags.TRANSFER_WRITE, 0);
             deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TRANSFER, VkPipelineStageFlags.BOTTOM_OF_PIPE, 0, 0, null, 0, null, 1, presentBarrier);
-            
+
             // Barrier 5: outputImage TRANSFER_SRC → GENERAL for next frame
-            var outputBarrier = VkImageMemoryBarrier.allocate(arena)
-                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VkImageLayout.TRANSFER_SRC_OPTIMAL)
-                    .newLayout(VkImageLayout.GENERAL)
-                    .srcAccessMask(VkAccessFlags.TRANSFER_READ)
-                    .dstAccessMask(VkAccessFlags.SHADER_WRITE)
-                    .image(outputImage)
-                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            var outputBarrier = createImageBarrier(arena, outputImage,
+                    VkImageLayout.TRANSFER_SRC_OPTIMAL, VkImageLayout.GENERAL,
+                    VkAccessFlags.TRANSFER_READ, VkAccessFlags.SHADER_WRITE);
             deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TRANSFER, VkPipelineStageFlags.RAY_TRACING_SHADER_KHR, 0, 0, null, 0, null, 1, outputBarrier);
         }
     }
@@ -1825,6 +1815,7 @@ public class Application {
     }
 
     private void cleanupSwapChain() {
+        // Destroy Vulkan objects first (they reference arena-allocated memory)
         if (swapChainImageViews != null) {
             for (long i = 0; i < swapChainImageViews.size(); i++) {
                 if (swapChainImageViews.read(i) != null) {
@@ -1846,6 +1837,10 @@ public class Application {
             deviceCommands.destroySwapchainKHR(device, swapChain, null);
             swapChain = null;
         }
+
+        // Free all swapchain-scoped memory after Vulkan objects are destroyed
+        swapchainArena.close();
+        swapchainArena = Arena.ofShared();
     }
 
     private void recreateDescriptorPool() {
