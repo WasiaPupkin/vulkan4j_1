@@ -25,18 +25,6 @@ void main() {
     // FOV 60° → tan(30°) ≈ 0.577
     float fovScale = tan(radians(60.0 * 0.5));
     vec3 rayDirection = normalize(vec3(pixelCoord * fovScale, 1.0));
-    
-    // DEBUG: Записываем центр экрана как точку отсчета
-    ivec2 center = ivec2(gl_LaunchSizeEXT.xy / 2);
-    if (gl_LaunchIDEXT.x == center.x && gl_LaunchIDEXT.y == center.y) {
-        imageStore(resultImage, ivec2(gl_LaunchIDEXT.xy), vec4(1.0, 1.0, 0.0, 1.0)); // Желтая точка в центре
-        return;
-    }
-    
-    // DEBUG: Записываем белый пиксель в верхний левый угол (raygen работает)
-    if (gl_LaunchIDEXT.x == 0 && gl_LaunchIDEXT.y == 0) {
-        imageStore(resultImage, ivec2(0, 0), vec4(1.0, 1.0, 1.0, 1.0));
-    }
 
     payload.color = vec3(0.1, 0.1, 0.9); // Blue for misses
 
