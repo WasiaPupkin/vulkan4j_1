@@ -1,4 +1,4 @@
-package tutorial.vulkan.raytracing;
+package tutorial.vulkan.raytracing.etalon_triangle;
 
 import club.doki7.ffm.NativeLayout;
 import club.doki7.ffm.annotation.*;
@@ -44,117 +44,369 @@ import java.nio.ByteOrder;
 import java.util.Objects;
 
 import static club.doki7.ffm.NativeLayout.UINT64_MAX;
-import static club.doki7.vulkan.VkConstants.WHOLE_SIZE;
 
+/**
+ * Ray Tracing Demo — Vulkan ray tracing pipeline using Java 22+ FFM API (Project Panama).
+ *
+ * <p>This demo renders a single triangle using hardware-accelerated ray tracing.
+ * The pipeline consists of:</p>
+ * <ul>
+ *   <li><b>BLAS (Bottom Level Acceleration Structure)</b> — contains triangle geometry</li>
+ *   <li><b>TLAS (Top Level Acceleration Structure)</b> — references BLAS with a transform</li>
+ *   <li><b>Ray Tracing Pipeline</b> — raygen, miss, and closest-hit shaders</li>
+ *   <li><b>SBT (Shader Binding Table)</b> — maps shader groups to shader handles</li>
+ *   <li><b>Output Image</b> — storage image where rays write pixel colors</li>
+ * </ul>
+ *
+ * <p>Rendering flow per frame:</p>
+ * <ol>
+ *   <li>Acquire swapchain image</li>
+ *   <li>Trace rays into output image (raygen → TLAS → BLAS → closest-hit/miss)</li>
+ *   <li>Copy output image to swapchain image</li>
+ *   <li>Present swapchain image</li>
+ * </ol>
+ */
 public class Application {
+    // ======================== Window Configuration ========================
+
+    /** Window width in pixels. */
     private static final int WIDTH = 1280;
+    /** Window height in pixels. */
     private static final int HEIGHT = 720;
+    /** Window title string, allocated in global arena (never freed). */
     private static final BytePtr WINDOW_TITLE = BytePtr.allocateString(Arena.global(), "Ray Tracing Demo");
+
+    // ======================== Validation Layers ========================
+
+    /**
+     * Enable Vulkan validation layers if system property "validation" is set.
+     * Run with: -Dvalidation
+     */
     private static final boolean ENABLE_VALIDATION_LAYERS = System.getProperty("validation") != null;
+    /** Name of the Khronos validation layer. */
     private static final String VALIDATION_LAYER_NAME = "VK_LAYER_KHRONOS_validation";
 
-    // Magic numbers extracted as named constants
-    private static final int VERTEX_STRIDE_BYTES = 12; // 3 floats * 4 bytes
+    // ======================== Magic Numbers Extracted as Named Constants ========================
+
+    /**
+     * Stride between consecutive vertices in the vertex buffer (bytes).
+     * Each vertex has 3 floats (x, y, z) = 3 × 4 = 12 bytes.
+     */
+    private static final int VERTEX_STRIDE_BYTES = 12;
+
+    /**
+     * Minimum padding added to acceleration structure buffer sizes.
+     * Ensures alignment and prevents out-of-bounds issues.
+     */
     private static final int MIN_BUFFER_PADDING = 4096;
-    private static final int INSTANCE_STRUCT_SIZE = 64; // VkAccelerationStructureInstanceKHR size
+
+    /**
+     * Size of VkAccelerationStructureInstanceKHR in bytes (64 bytes).
+     * Layout: transform[12 floats=48 bytes] + customIndexAndMask[4 bytes]
+     *       + sbtOffsetAndFlags[4 bytes] + blasAddress[8 bytes].
+     */
+    private static final int INSTANCE_STRUCT_SIZE = 64;
+
+    /** Byte offset of the transform matrix within the instance struct (0). */
     private static final int INSTANCE_TRANSFORM_OFFSET = 0;
+    /** Byte offset of the packed custom index (24 bits) + mask (8 bits) field. */
     private static final int INSTANCE_CUSTOM_INDEX_MASK_OFFSET = 48;
+    /** Byte offset of the packed SBT record offset (24 bits) + flags (8 bits) field. */
     private static final int INSTANCE_SBT_OFFSET_FLAGS_OFFSET = 52;
+    /** Byte offset of the BLAS device address reference (64-bit). */
     private static final int INSTANCE_ACCEL_REF_OFFSET = 56;
+    /** Number of floats in the 3×4 transform matrix (12). */
     private static final int INSTANCE_TRANSFORM_FLOAT_COUNT = 12;
+    /** Bit shift for packing the 8-bit mask into a 32-bit field (upper 8 bits). */
     private static final int INSTANCE_MASK_SHIFT = 24;
+    /** Bit shift for packing the 8-bit flags into a 32-bit field (upper 8 bits). */
     private static final int INSTANCE_FLAGS_SHIFT = 24;
+
+    /**
+     * Total number of floats in push constants: 16 (invProjection) + 16 (invView) = 32.
+     * Passed to the raygen shader each frame to generate rays from camera.
+     */
     private static final int PUSH_CONSTANT_FLOAT_COUNT = 32;
+    /** Size of push constants in bytes: 32 floats × 4 = 128 bytes. */
     private static final int PUSH_CONSTANT_SIZE_BYTES = 128;
+    /** Number of floats in a 4×4 matrix (16). */
     private static final int MATRIX4F_FLOAT_COUNT = 16;
+
+    /**
+     * Extra padding added to TLAS scratch buffer size.
+     * Some drivers require additional space for scratch operations.
+     */
     private static final int SBT_REGION_PADDING = 4096;
 
-    // GPU Vendor IDs
+    // ======================== GPU Vendor IDs ========================
+
+    /** AMD vendor ID used to detect AMD-specific features. */
     private static final int VENDOR_ID_AMD = 0x1002;
+    /** NVIDIA vendor ID (reserved for future use). */
     private static final int VENDOR_ID_NVIDIA = 0x10DE;
+    /** Intel vendor ID (reserved for future use). */
     private static final int VENDOR_ID_INTEL = 0x8086;
+    /** Legacy Intel Arc vendor ID (reserved for future use). */
     private static final int VENDOR_ID_INTEL_OLD = 0x163C;
+    /** True if the selected GPU is made by AMD. */
     private boolean isAmdGpu = false;
 
-    // Ray tracing properties
+    // ======================== Ray Tracing Properties (queried at runtime) ========================
+
+    /** Size of a single shader group handle in bytes (typically 32). */
     private int handleSize;
+    /** Alignment requirement for shader group handles (typically 32). */
     private int handleAlignment;
+    /** Alignment requirement for each SBT region (typically 64, shaderGroupBaseAlignment). */
     private int shaderGroupBaseAlignment;
+    /** Stride between consecutive SBT records (equals handleSize). */
     private int sbtRecordSize;
+
+    /**
+     * Device address of the raygen region in the Shader Binding Table.
+     * The raygen shader reads this address to find its shader handle.
+     */
     private long raygenAddress;
+    /** Device address of the miss region in the SBT. */
     private long missAddress;
+    /** Device address of the hit region in the SBT. */
     private long hitAddress;
 
-    // Core
+    // ======================== Core Vulkan Handles ========================
+
+    /** GLFW window handle. */
     private GLFWwindow window;
+
+    /**
+     * Static commands — Vulkan functions that don't need any instance or device.
+     * Example: vkEnumerateInstanceLayerProperties.
+     */
     private VkStaticCommands staticCommands;
+    /**
+     * Entry commands — functions called before creating a VkInstance.
+     * Example: vkCreateInstance, vkEnumeratePhysicalDevices.
+     */
     private VkEntryCommands entryCommands;
+    /**
+     * Vulkan instance — represents the connection to the Vulkan loader.
+     * Needed for physical device enumeration and surface creation.
+     */
     private VkInstance instance;
+    /**
+     * Instance commands — functions that require a VkInstance.
+     * Example: vkCreateDebugUtilsMessengerEXT, vkEnumeratePhysicalDevices.
+     */
     private VkInstanceCommands instanceCommands;
+    /** Debug messenger handle (validation layer callbacks). */
     private VkDebugUtilsMessengerEXT debugMessenger;
+    /**
+     * Surface — platform-specific window surface (created by GLFW).
+     * Required for swapchain creation.
+     */
     private VkSurfaceKHR surface;
+    /**
+     * Physical device — represents a GPU.
+     * Selected from available GPUs based on extension and feature requirements.
+     */
     private VkPhysicalDevice physicalDevice;
+    /**
+     * Logical device — connection to the physical device for resource creation.
+     * Created with ray tracing and swapchain extensions enabled.
+     */
     private VkDevice device;
+    /**
+     * Device commands — functions that require a VkDevice.
+     * Example: vkCreateBuffer, vkCreatePipeline.
+     */
     private VkDeviceCommands deviceCommands;
+    /** Queue for graphics/compute operations. */
     private VkQueue graphicsQueue;
+    /** Queue for presenting rendered images to the screen. */
     private VkQueue presentQueue;
 
-    // VMA
+    // ======================== VMA (Vulkan Memory Allocator) ========================
+
+    /**
+     * VMA allocator — high-level memory manager that simplifies VkDeviceMemory management.
+     * Automatically picks optimal memory types and handles sub-allocation.
+     */
     private VmaAllocator vmaAllocator;
 
-    // Swapchain
+    // ======================== Swapchain ========================
+
+    /**
+     * Swapchain — chain of images used for on-screen rendering.
+     * Each frame we render into one swapchain image and present it.
+     */
     private VkSwapchainKHR swapChain;
+    /**
+     * Array of swapchain images (obtained after swapchain creation).
+     * Allocated on swapchainArena, freed on swapchain recreation.
+     */
     private VkImage.Ptr swapChainImages;
+    /** Pixel format of swapchain images (typically VK_FORMAT_R8G8B8A8_UNORM). */
     private @EnumType(VkFormat.class) int swapChainImageFormat;
+    /** Dimensions of swapchain images (width × height in pixels). */
     private VkExtent2D swapChainExtent;
+    /**
+     * Array of image views — "windows" into swapchain images.
+     * Required for using images in pipelines.
+     */
     private VkImageView.Ptr swapChainImageViews;
+    /**
+     * Arena for swapchain-scoped allocations (image pointers, extents, views).
+     * Closed and recreated on every swapchain recreation (e.g., window resize).
+     * Using Arena.ofShared() allows explicit close() unlike Arena.ofAuto().
+     */
     private Arena swapchainArena = Arena.ofShared();
 
-    // Ray tracing resources
+    // ======================== Ray Tracing Resources ========================
+
+    /**
+     * Vertex buffer — stores triangle vertex positions (x, y, z).
+     * Allocated via VMA with HOST_VISIBLE (CPU write) and SHADER_DEVICE_ADDRESS (GPU read for BLAS build).
+     */
     private VkBuffer vertexBuffer;
+    /** VMA allocation tracking info for vertexBuffer. */
     private VmaAllocation vertexBufferAllocation;
+
+    /** Buffer that stores the BLAS (Bottom Level Acceleration Structure). */
     private VkBuffer blasBuffer;
+    /** Device memory backing blasBuffer. */
     private VkDeviceMemory blasBufferMemory;
+    /** Buffer that stores the TLAS (Top Level Accelereration Structure). */
     private VkBuffer tlasBuffer;
+    /** Device memory backing tlasBuffer. */
     private VkDeviceMemory tlasBufferMemory;
+
+    /**
+     * BLAS — contains the actual triangle geometry (vertices + indices).
+     * Built once during initialization. The ray tracer uses this to find intersections.
+     */
     private VkAccelerationStructureKHR blas;
+    /**
+     * TLAS — references BLAS with a transform matrix.
+     * Allows instancing: the same BLAS can appear multiple times with different transforms.
+     */
     private VkAccelerationStructureKHR tlas;
+
+    /**
+     * Output image — storage image where the raygen shader writes pixel colors.
+     * Format: R8G8B8A8_UNORM. After ray tracing, it's copied to the swapchain.
+     */
     private VkImage outputImage;
+    /** VMA allocation tracking info for outputImage. */
     private VmaAllocation outputImageAllocation;
+    /** Image view for outputImage — needed for descriptor set binding. */
     private VkImageView outputImageView;
+
+    /**
+     * Descriptor set layout — defines what resources the shaders can access:
+     * - Binding 0: STORAGE_IMAGE (output image)
+     * - Binding 1: ACCELERATION_STRUCTURE (TLAS)
+     */
     private VkDescriptorSetLayout descriptorSetLayout;
+    /**
+     * Pipeline layout — combines descriptor set layouts and push constant ranges.
+     * Tells the pipeline what data shaders will receive.
+     */
     private VkPipelineLayout pipelineLayout;
+    /** Ray tracing pipeline — contains raygen, miss, closest-hit shaders. */
     private VkPipeline rayTracingPipeline;
+
+    /** Pool from which descriptor sets are allocated. */
     private VkDescriptorPool descriptorPool;
+    /**
+     * Descriptor set — actual binding of resources (outputImage + TLAS) to the shader.
+     * Updated once during init, reused every frame.
+     */
     private VkDescriptorSet descriptorSet;
+
+    /**
+     * Shader Binding Table (SBT) buffer — contains shader group handles.
+     * The ray tracer uses this to find the right shader for each ray interaction
+     * (raygen for primary rays, miss for rays that hit nothing, hit for ray-object intersections).
+     */
     private VkBuffer sbtBuffer;
+    /** VMA allocation tracking info for sbtBuffer. */
     private VmaAllocation sbtAllocation;
 
-    // Sync
+    // ======================== Synchronization Objects ========================
+
+    /**
+     * Semaphores that signal when a swapchain image is available for rendering.
+     * One per frame in flight (MAX_FRAMES_IN_FLIGHT = 2).
+     */
     private VkSemaphore[] imageAvailableSemaphores;
+    /**
+     * Semaphores that signal when rendering is complete and the image can be presented.
+     */
     private VkSemaphore[] renderFinishedSemaphores;
+    /**
+     * Fences that synchronize CPU and GPU execution.
+     * Signaled when the GPU finishes processing a frame. Used to prevent CPU from
+     * getting too far ahead of GPU (frame pacing).
+     */
     private VkFence[] inFlightFences;
+    /**
+     * Command pool — allocator for command buffers.
+     * All command buffers (drawFrame, single-time ops) come from this pool.
+     */
     private VkCommandPool commandPool;
+    /**
+     * Command buffers — one per frame in flight.
+     * Each contains the ray tracing commands for that frame.
+     */
     private VkCommandBuffer[] commandBuffers;
+    /**
+     * Maximum number of frames the CPU can queue ahead of the GPU.
+     * Value of 2 means: while GPU processes frame N, CPU can prepare frame N+1.
+     */
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
+    /** Index of the current frame in the frame-in-flight ring buffer (0 or 1). */
     private int currentFrame = 0;
+    /** Set to true by the framebuffer resize callback. */
     private boolean framebufferResized = false;
+    /**
+     * Set to true when swapchain needs recreation (resize, minimize, etc.).
+     * Checked at the start of each frame in mainLoop().
+     */
     private boolean needsSwapchainRecreation = false;
 
-    // Camera parameters
+    // ======================== Camera Parameters ========================
+
+    /**
+     * Field of view for the perspective projection (degrees).
+     * Affects how wide the camera "sees". Typical values: 45-90.
+     */
     private final float cameraFOV = 60.0f;
 
-    // Libraries
+    // ======================== Native Library Instances ========================
+
+    /** GLFW native library handle. Loaded once at class initialization. */
     private static final ISharedLibrary libGLFW = GLFWLoader.loadGLFWLibrary();
+    /** GLFW function bindings. */
     private static final GLFW glfw = GLFWLoader.loadGLFW(libGLFW);
+    /** shaderc native library handle (for GLSL → SPIR-V compilation). */
     private static final ISharedLibrary libShaderc = ILibraryLoader.platformLoader().loadLibrary("shaderc_shared");
+    /** shaderc function bindings. */
     private static final Shaderc shaderc = new Shaderc(libShaderc);
+    /** Vulkan native library handle (vulkan-1.dll). */
     private static final ISharedLibrary libVulkan = VulkanLoader.loadVulkanLibrary();
+    /** VMA native library handle. */
     private static final ISharedLibrary libVMA = ILibraryLoader.platformLoader().loadLibrary("vma");
+    /** VMA function bindings. */
     private static final VMA vma = new VMA(libVMA);
+
+    /** shaderc compiler instance — compiles GLSL shaders to SPIR-V at runtime. */
     private ShadercCompiler shadercCompiler;
+    /** shaderc compilation options (target Vulkan version, optimization flags). */
     private ShadercCompileOptions shadercCompileOptions;
 
+    /**
+     * Entry point of the application lifecycle.
+     * Initializes window, Vulkan, enters render loop, then cleans up.
+     */
     public void run() {
         initWindow();
         initVulkan();
@@ -162,6 +414,18 @@ public class Application {
         cleanup();
     }
 
+    /**
+     * Creates a GLFW window with Vulkan support.
+     *
+     * <p>Key steps:</p>
+     * <ol>
+     *   <li>Initialize GLFW library</li>
+     *   <li>Verify Vulkan support</li>
+     *   <li>Disable OpenGL API (we use Vulkan directly)</li>
+     *   <li>Create window with NO_CLIENT_API hint</li>
+     *   <li>Register framebuffer resize callback</li>
+     * </ol>
+     */
     private void initWindow() {
         if (glfw.init() != GLFW.TRUE) {
             throw new RuntimeException("Failed to initialize GLFW");
@@ -169,8 +433,10 @@ public class Application {
         if (glfw.vulkanSupported() != GLFW.TRUE) {
             throw new RuntimeException("Vulkan is not supported");
         }
+        // Disable OpenGL context creation — we use Vulkan directly
         glfw.windowHint(GLFW.CLIENT_API, GLFW.NO_API);
         window = Objects.requireNonNull(glfw.createWindow(WIDTH, HEIGHT, WINDOW_TITLE, null, null));
+        // Callback fires when window is resized or restored from minimized state
         glfw.setFramebufferSizeCallback(window, (w, width, height) -> {
             if (width > 0 && height > 0) {
                 framebufferResized = true;
@@ -178,34 +444,56 @@ public class Application {
         });
     }
 
+    /**
+     * Initializes all Vulkan resources in dependency order.
+     *
+     * <p>Order matters: each step depends on the previous one.
+     * The chain is: Instance → PhysicalDevice → LogicalDevice → Swapchain → Resources → Pipeline.</p>
+     */
     private void initVulkan() {
+        // Load Vulkan function pointers (static = no instance needed, entry = instance-level)
         staticCommands = VulkanLoader.loadStaticCommands(libVulkan);
         entryCommands = VulkanLoader.loadEntryCommands(staticCommands);
-        createInstance();
-        setupDebugMessenger();
-        createSurface();
-        pickPhysicalDevice();
-        createLogicalDevice();
-        createCommandPool();
-        createVMA();
-        createShaderCompiler();
-        createSwapchain();
-        createImageViews();
-        createVertexBuffer();
-        createAccelerationStructures();
-        createOutputImage();
-        createDescriptorSetLayout();
-        createDescriptorPool();
-        createDescriptorSet();
-        createRayTracingPipeline();
-        createSyncObjects();
-        createShaderBindingTable();
-        createCommandBuffers();
-        
-        // Transition output image to GENERAL layout after creating all command buffers
+        createInstance();           // VkInstance — connection to Vulkan loader
+        setupDebugMessenger();      // VkDebugUtilsMessengerEXT — validation layer callbacks
+        createSurface();            // VkSurfaceKHR — platform-specific window surface
+        pickPhysicalDevice();       // VkPhysicalDevice — select GPU
+        createLogicalDevice();      // VkDevice — logical device for resource creation
+        createCommandPool();        // VkCommandPool — command buffer allocator
+        createVMA();                // VmaAllocator — high-level memory manager
+        createShaderCompiler();     // Shaderc — GLSL to SPIR-V compiler
+        createSwapchain();          // VkSwapchainKHR — render target chain
+        createImageViews();         // VkImageView — views into swapchain images
+        createVertexBuffer();       // VkBuffer — triangle vertex data
+        createAccelerationStructures(); // BLAS + TLAS — ray tracing geometry
+        createOutputImage();        // VkImage — storage image for ray output
+        createDescriptorSetLayout();// VkDescriptorSetLayout — shader resource layout
+        createDescriptorPool();     // VkDescriptorPool — descriptor set allocator
+        createDescriptorSet();      // VkDescriptorSet — bind outputImage + TLAS
+        createRayTracingPipeline(); // VkPipeline — raygen + miss + closest-hit shaders
+        createSyncObjects();        // Semaphores + Fences — CPU/GPU synchronization
+        createShaderBindingTable(); // SBT buffer — shader group handle mapping
+        createCommandBuffers();     // VkCommandBuffer — per-frame command buffers
+
+        // Transition output image from UNDEFINED to GENERAL layout.
+        // GENERAL is required because the raygen shader writes to it as a storage image.
         transitionOutputImageToGeneral();
     }
 
+    /**
+     * Main render loop — runs until the window is closed.
+     *
+     * <p>Each frame:</p>
+     * <ol>
+     *   <li>Poll window events (input, resize)</li>
+     *   <li>Recreate swapchain if needed (resize, minimize)</li>
+     *   <li>Wait if window is minimized (glfw.waitEvents — zero CPU usage)</li>
+     *   <li>Draw frame: acquire image → trace rays → copy → present</li>
+     * </ol>
+     *
+     * <p>Frame pacing: MAX_FRAMES_IN_FLIGHT=2 allows CPU to prepare frame N+1
+     * while GPU processes frame N. Fences prevent the CPU from getting too far ahead.</p>
+     */
     private void mainLoop() {
         while (glfw.windowShouldClose(window) == GLFW.FALSE) {
             glfw.pollEvents();
@@ -214,6 +502,7 @@ public class Application {
                 needsSwapchainRecreation = false;
                 continue;
             }
+            // Window minimized — sleep until an event occurs (resize, restore)
             if (swapChainExtent.width() <= 0 || swapChainExtent.height() <= 0) {
                 glfw.waitEvents();
                 handleMinimizedWindow();
@@ -226,26 +515,38 @@ public class Application {
                 needsSwapchainRecreation = true;
             }
         }
+        // Ensure GPU finishes all work before we start destroying resources
         deviceCommands.deviceWaitIdle(device);
     }
 
+    /**
+     * Destroys all Vulkan resources in reverse order of creation.
+     *
+     * <p>Reverse order is critical: a resource can only be destroyed after
+     * all resources that depend on it have been destroyed. For example,
+     * acceleration structures must be destroyed before their storage buffers.</p>
+     *
+     * <p>The order is: CommandPool → SBT → Pipeline → Descriptors → AS → Buffers →
+     * Images → Swapchain → Sync → VMA → Device → Surface → Debug → Instance → GLFW.</p>
+     */
     private void cleanup() {
+        // Ensure GPU finishes all pending work before destroying resources
         deviceCommands.deviceWaitIdle(device);
 
-        // 1. Command buffers (created last)
+        // 1. Command pool (and all command buffers allocated from it)
         if (commandPool != null) {
             deviceCommands.destroyCommandPool(device, commandPool, null);
             commandPool = null;
         }
 
-        // 2. Shader Binding Table buffer
+        // 2. Shader Binding Table buffer (VMA-allocated)
         if (sbtBuffer != null) {
             vma.destroyBuffer(vmaAllocator, sbtBuffer, sbtAllocation);
             sbtBuffer = null;
             sbtAllocation = null;
         }
 
-        // 3. Ray tracing pipeline and layout
+        // 3. Ray tracing pipeline and layout (depend on shaders, descriptor layout)
         if (rayTracingPipeline != null) {
             deviceCommands.destroyPipeline(device, rayTracingPipeline, null);
             rayTracingPipeline = null;
@@ -255,7 +556,7 @@ public class Application {
             pipelineLayout = null;
         }
 
-        // 4. Descriptor set and pool
+        // 4. Descriptor set, pool, and layout (depend on acceleration structures)
         if (descriptorPool != null) {
             deviceCommands.destroyDescriptorPool(device, descriptorPool, null);
             descriptorPool = null;
@@ -276,7 +577,7 @@ public class Application {
             tlas = null;
         }
 
-        // 6. Acceleration structure storage buffers
+        // 6. Acceleration structure storage buffers (manually allocated with VkDeviceMemory)
         if (blasBuffer != null) {
             deviceCommands.destroyBuffer(device, blasBuffer, null);
             blasBuffer = null;
@@ -1567,13 +1868,35 @@ public class Application {
         }
     }
 
+    /**
+     * Renders a single frame using the ray tracing pipeline.
+     *
+     * <p>Frame synchronization flow:</p>
+     * <ol>
+     *   <li><b>Wait for fence</b> — ensure GPU finished with this frame index from previous loop</li>
+     *   <li><b>Acquire image</b> — get next swapchain image (signaled by imageAvailableSemaphore)</li>
+     *   <li><b>Record commands</b> — trace rays into output image, copy to swapchain</li>
+     *   <li><b>Submit</b> — submit to graphics queue (signaled by renderFinishedSemaphore)</li>
+     *   <li><b>Present</b> — show the rendered image on screen</li>
+     *   <li><b>Advance frame index</b> — cycle through 0, 1, 0, 1...</li>
+     * </ol>
+     *
+     * <p>If the swapchain is invalid (resize, minimized), triggers recreation instead of rendering.</p>
+     */
     private void drawFrame() {
         try (var arena = Arena.ofConfined()) {
+            // Guard against zero-extent swapchain (shouldn't happen, but safety check)
             if (swapChainExtent.width() == 0 || swapChainExtent.height() == 0) {
                 needsSwapchainRecreation = true;
                 return;
             }
+
+            // Wait until GPU finished processing the fence for this frame index.
+            // This prevents CPU from queuing more frames than GPU can handle.
             deviceCommands.waitForFences(device, 1, VkFence.Ptr.allocateV(arena, inFlightFences[currentFrame]), VkConstants.TRUE, UINT64_MAX);
+
+            // Acquire the next swapchain image for rendering.
+            // imageAvailableSemaphore will be signaled when the image is ready.
             var pImageIndex = IntPtr.allocate(arena);
             var result = deviceCommands.acquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], null, pImageIndex);
             if (result == VkResult.ERROR_SURFACE_LOST_KHR || result == VkResult.ERROR_OUT_OF_DATE_KHR || result == VkResult.ERROR_INITIALIZATION_FAILED) {
@@ -1583,11 +1906,18 @@ public class Application {
                 throw new RuntimeException("Failed to acquire swap chain image: " + VkResult.explain(result));
             }
             int imageIndex = pImageIndex.read();
+
+            // Reset fence to unsignaled — it will be signaled again when GPU finishes this frame
             deviceCommands.resetFences(device, 1, VkFence.Ptr.allocateV(arena, inFlightFences[currentFrame]));
+
+            // Record ray tracing commands into the pre-allocated command buffer
             var beginInfo = VkCommandBufferBeginInfo.allocate(arena);
             deviceCommands.beginCommandBuffer(commandBuffers[currentFrame], beginInfo);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
             deviceCommands.endCommandBuffer(commandBuffers[currentFrame]);
+
+            // Submit command buffer to the graphics queue.
+            // Waits for imageAvailableSemaphore, signals renderFinishedSemaphore when done.
             var submitInfo = VkSubmitInfo.allocate(arena)
                     .waitSemaphoreCount(1)
                     .pWaitSemaphores(VkSemaphore.Ptr.allocateV(arena, imageAvailableSemaphores[currentFrame]))
@@ -1600,6 +1930,9 @@ public class Application {
             if (result != VkResult.SUCCESS) {
                 throw new RuntimeException("Failed to submit draw command buffer: " + VkResult.explain(result));
             }
+
+            // Present the rendered image to the screen.
+            // Waits for renderFinishedSemaphore before presenting.
             var presentInfo = VkPresentInfoKHR.allocate(arena)
                     .waitSemaphoreCount(1)
                     .pWaitSemaphores(VkSemaphore.Ptr.allocateV(arena, renderFinishedSemaphores[currentFrame]))
@@ -1613,10 +1946,16 @@ public class Application {
             } else if (result != VkResult.SUCCESS) {
                 throw new RuntimeException("Failed to present swap chain image: " + VkResult.explain(result));
             }
+
+            // Advance to next frame index (ring buffer: 0 → 1 → 0 → 1...)
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
     }
 
+    /**
+     * Checks if the window has been restored from minimized state.
+     * If so, triggers swapchain recreation on the next frame.
+     */
     private void handleMinimizedWindow() {
         try (var arena = Arena.ofConfined()) {
             IntPtr w = IntPtr.allocate(arena), h = IntPtr.allocate(arena);
@@ -1644,8 +1983,29 @@ public class Application {
                 .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
     }
 
+    /**
+     * Records ray tracing commands into a command buffer for the current frame.
+     *
+     * <p>This is the heart of the rendering pipeline. Each frame it:</p>
+     * <ol>
+     *   <li><b>Binds the ray tracing pipeline</b> and descriptor set (outputImage + TLAS)</li>
+     *   <li><b>Computes camera matrices</b> — perspective projection and view (lookAt)</li>
+     *   <li><b>Inverts matrices</b> — ray tracing needs inverse projection and inverse view
+     *       to convert screen-space pixel coordinates into world-space ray directions</li>
+     *   <li><b>Pushes constants</b> — sends invProjection[16] + invView[16] to the raygen shader</li>
+     *   <li><b>Traces rays</b> — cmdTraceRaysKHR launches one ray per pixel</li>
+     *   <li><b>Transitions layouts</b> — outputImage GENERAL → TRANSFER_SRC for copying</li>
+     *   <li><b>Copies result</b> — outputImage → swapchain image via cmdCopyImage</li>
+     *   <li><b>Final transitions</b> — swapchain → PRESENT_SRC, outputImage → GENERAL for next frame</li>
+     * </ol>
+     *
+     * @param cmd the command buffer to record into
+     * @param imageIndex index of the swapchain image to present to
+     */
     private void recordCommandBuffer(VkCommandBuffer cmd, int imageIndex) {
         try (var arena = Arena.ofConfined()) {
+            // Define SBT regions — device addresses and sizes for each shader group.
+            // The ray tracer uses these to find the right shader code for each ray stage.
             var raygenRegion = VkStridedDeviceAddressRegionKHR.allocate(arena)
                     .deviceAddress(raygenAddress)
                     .stride(sbtRecordSize)
@@ -1658,13 +2018,13 @@ public class Application {
                     .deviceAddress(hitAddress)
                     .stride(sbtRecordSize)
                     .size(sbtRecordSize);
+            // No callable shaders in this demo (used for procedural geometry)
             var callableRegion = VkStridedDeviceAddressRegionKHR.allocate(arena)
                     .deviceAddress(0)
                     .stride(0)
                     .size(0);
-            
-            // outputImage is already in GENERAL layout after initialization
-            // Just add barrier for synchronization
+
+            // --- Barrier 1: Ensure outputImage is in GENERAL layout for raygen write ---
             var rayTraceBarrier = createImageBarrier(arena, outputImage,
                     VkImageLayout.GENERAL, VkImageLayout.GENERAL,
                     VkAccessFlags.SHADER_WRITE, VkAccessFlags.SHADER_WRITE);
@@ -1672,54 +2032,77 @@ public class Application {
                     VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,
                     VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,
                     0, 0, null, 0, null, 1, rayTraceBarrier);
-            
+
+            // --- Bind ray tracing pipeline and descriptor set ---
             deviceCommands.cmdBindPipeline(cmd, VkPipelineBindPoint.RAY_TRACING_KHR, rayTracingPipeline);
             var pDescriptorSet = VkDescriptorSet.Ptr.allocate(arena);
             pDescriptorSet.write(descriptorSet);
             deviceCommands.cmdBindDescriptorSets(cmd, VkPipelineBindPoint.RAY_TRACING_KHR, pipelineLayout, 0, 1, pDescriptorSet, 0, null);
+
+            // --- Compute camera matrices ---
+            // Aspect ratio matches the window dimensions
             float aspectRatio = (float)swapChainExtent.width() / (float)swapChainExtent.height();
+            // Field of view in radians
             float fovRadians = (float)Math.toRadians(cameraFOV);
+            // Perspective projection matrix: defines how 3D projects to 2D
+            // near=0.1, far=100.0, left-handed coordinate system (true = Vulkan-style)
             Matrix4f projection = new Matrix4f().setPerspective(fovRadians, aspectRatio, 0.1f, 100.0f, true);
+            // View matrix: where the camera is and where it looks
+            // eye=(0,0,5), center=(0,0,0), up=(0,1,0) — camera on Z axis looking at origin
             Matrix4f view = new Matrix4f();
             view.lookAt(new Vector3f(0.0f, 0.0f, 5.0f), new Vector3f(0.0f, 0.0f, 0.0f), new Vector3f(0.0f, 1.0f, 0.0f));
+
+            // --- Invert matrices for ray generation ---
+            // In rasterization: vertex * projection * view → screen pixel
+            // In ray tracing: screen pixel * invProjection * invView → world ray direction
+            // The raygen shader needs these inverse matrices to shoot rays from camera through each pixel.
             Matrix4f invProjection = new Matrix4f(projection).invert();
             Matrix4f invView = new Matrix4f(view).invert();
+
+            // --- Pack into push constants (32 floats = 128 bytes) ---
             float[] pushConstants = new float[PUSH_CONSTANT_FLOAT_COUNT];
-            invProjection.get(pushConstants, 0);
-            invView.get(pushConstants, MATRIX4F_FLOAT_COUNT);
+            invProjection.get(pushConstants, 0);                        // floats 0-15: inverse projection
+            invView.get(pushConstants, MATRIX4F_FLOAT_COUNT);          // floats 16-31: inverse view
+
+            // Copy Java array to native memory (FFM requires MemorySegment for Vulkan)
             var nativeMemory = arena.allocate(ValueLayout.JAVA_FLOAT, PUSH_CONSTANT_FLOAT_COUNT);
             for (int i = 0; i < PUSH_CONSTANT_FLOAT_COUNT; i++) {
                 nativeMemory.set(ValueLayout.JAVA_FLOAT, i * Float.BYTES, pushConstants[i]);
             }
+            // Upload push constants to the raygen shader stage
             deviceCommands.cmdPushConstants(cmd, pipelineLayout, VkShaderStageFlags.RAYGEN_KHR, 0, PUSH_CONSTANT_SIZE_BYTES, nativeMemory);
+
+            // --- Trace rays! ---
+            // Launches width×height×1 rays. Each ray goes through:
+            // raygen (origin+direction) → traverse TLAS → intersect BLAS → closest-hit or miss
             deviceCommands.cmdTraceRaysKHR(cmd, raygenRegion, missRegion, hitRegion, callableRegion, swapChainExtent.width(), swapChainExtent.height(), 1);
-            
-            // Barrier 2: outputImage GENERAL → TRANSFER_SRC for copying
+
+            // --- Barrier 2: outputImage GENERAL → TRANSFER_SRC (prepare for copy) ---
             var transferBarrier = createImageBarrier(arena, outputImage,
                     VkImageLayout.GENERAL, VkImageLayout.TRANSFER_SRC_OPTIMAL,
                     VkAccessFlags.SHADER_WRITE, VkAccessFlags.TRANSFER_READ);
             deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.RAY_TRACING_SHADER_KHR, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, transferBarrier);
 
-            // Barrier 3: swapchain image UNDEFINED → TRANSFER_DST
+            // --- Barrier 3: swapchain image UNDEFINED → TRANSFER_DST (prepare to receive) ---
             var swapchainBarrier = createImageBarrier(arena, swapChainImages.read(imageIndex),
                     VkImageLayout.UNDEFINED, VkImageLayout.TRANSFER_DST_OPTIMAL,
                     0, VkAccessFlags.TRANSFER_WRITE);
             deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TOP_OF_PIPE, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, swapchainBarrier);
-            
-            // Copy output image to swapchain
+
+            // --- Copy rendered output to swapchain image ---
             var copy = VkImageCopy.allocate(arena)
                     .srcSubresource(s -> s.aspectMask(VkImageAspectFlags.COLOR).layerCount(1))
                     .dstSubresource(s -> s.aspectMask(VkImageAspectFlags.COLOR).layerCount(1))
                     .extent(e -> e.width(swapChainExtent.width()).height(swapChainExtent.height()).depth(1));
             deviceCommands.cmdCopyImage(cmd, outputImage, VkImageLayout.TRANSFER_SRC_OPTIMAL, swapChainImages.read(imageIndex), VkImageLayout.TRANSFER_DST_OPTIMAL, 1, copy);
 
-            // Barrier 4: swapchain image TRANSFER_DST → PRESENT_SRC
+            // --- Barrier 4: swapchain image TRANSFER_DST → PRESENT_SRC (ready for display) ---
             var presentBarrier = createImageBarrier(arena, swapChainImages.read(imageIndex),
                     VkImageLayout.TRANSFER_DST_OPTIMAL, VkImageLayout.PRESENT_SRC_KHR,
                     VkAccessFlags.TRANSFER_WRITE, 0);
             deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TRANSFER, VkPipelineStageFlags.BOTTOM_OF_PIPE, 0, 0, null, 0, null, 1, presentBarrier);
 
-            // Barrier 5: outputImage TRANSFER_SRC → GENERAL for next frame
+            // --- Barrier 5: outputImage TRANSFER_SRC → GENERAL (reset for next frame) ---
             var outputBarrier = createImageBarrier(arena, outputImage,
                     VkImageLayout.TRANSFER_SRC_OPTIMAL, VkImageLayout.GENERAL,
                     VkAccessFlags.TRANSFER_READ, VkAccessFlags.SHADER_WRITE);
