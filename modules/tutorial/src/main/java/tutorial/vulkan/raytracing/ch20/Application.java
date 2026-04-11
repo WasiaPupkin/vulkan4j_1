@@ -1,0 +1,1810 @@
+package tutorial.vulkan.raytracing.ch20;
+
+import club.doki7.ffm.NativeLayout;
+import club.doki7.ffm.annotation.EnumType;
+import club.doki7.ffm.library.ILibraryLoader;
+import club.doki7.ffm.library.ISharedLibrary;
+import club.doki7.ffm.ptr.BytePtr;
+import club.doki7.ffm.ptr.FloatPtr;
+import club.doki7.ffm.ptr.IntPtr;
+import club.doki7.ffm.ptr.PointerPtr;
+import club.doki7.glfw.GLFW;
+import club.doki7.glfw.GLFWLoader;
+import club.doki7.glfw.handle.GLFWwindow;
+import club.doki7.vma.VMA;
+import club.doki7.vma.VMAUtil;
+import club.doki7.vma.bitmask.VmaAllocationCreateFlags;
+import club.doki7.vma.bitmask.VmaAllocatorCreateFlags;
+import club.doki7.vma.datatype.VmaAllocationCreateInfo;
+import club.doki7.vma.datatype.VmaAllocatorCreateInfo;
+import club.doki7.vma.datatype.VmaVulkanFunctions;
+import club.doki7.vma.enumtype.VmaMemoryUsage;
+import club.doki7.vma.handle.VmaAllocation;
+import club.doki7.vma.handle.VmaAllocator;
+import club.doki7.vulkan.Version;
+import club.doki7.vulkan.VkConstants;
+import club.doki7.vulkan.bitmask.VkAccessFlags;
+import club.doki7.vulkan.bitmask.VkBufferUsageFlags;
+import club.doki7.vulkan.bitmask.VkBuildAccelerationStructureFlagsKHR;
+import club.doki7.vulkan.bitmask.VkCommandBufferUsageFlags;
+import club.doki7.vulkan.bitmask.VkCommandPoolCreateFlags;
+import club.doki7.vulkan.bitmask.VkCompositeAlphaFlagsKHR;
+import club.doki7.vulkan.bitmask.VkFenceCreateFlags;
+import club.doki7.vulkan.bitmask.VkGeometryFlagsKHR;
+import club.doki7.vulkan.bitmask.VkGeometryInstanceFlagsKHR;
+import club.doki7.vulkan.bitmask.VkImageAspectFlags;
+import club.doki7.vulkan.bitmask.VkImageUsageFlags;
+import club.doki7.vulkan.bitmask.VkMemoryAllocateFlags;
+import club.doki7.vulkan.bitmask.VkMemoryPropertyFlags;
+import club.doki7.vulkan.bitmask.VkPipelineCreateFlags;
+import club.doki7.vulkan.bitmask.VkPipelineStageFlags;
+import club.doki7.vulkan.bitmask.VkQueueFlags;
+import club.doki7.vulkan.bitmask.VkSampleCountFlags;
+import club.doki7.vulkan.bitmask.VkShaderStageFlags;
+import club.doki7.vulkan.command.VkDeviceCommands;
+import club.doki7.vulkan.command.VkEntryCommands;
+import club.doki7.vulkan.command.VkInstanceCommands;
+import club.doki7.vulkan.command.VkStaticCommands;
+import club.doki7.vulkan.command.VulkanLoader;
+import club.doki7.vulkan.datatype.VkAccelerationStructureBuildGeometryInfoKHR;
+import club.doki7.vulkan.datatype.VkAccelerationStructureBuildRangeInfoKHR;
+import club.doki7.vulkan.datatype.VkAccelerationStructureBuildSizesInfoKHR;
+import club.doki7.vulkan.datatype.VkAccelerationStructureCreateInfoKHR;
+import club.doki7.vulkan.datatype.VkAccelerationStructureDeviceAddressInfoKHR;
+import club.doki7.vulkan.datatype.VkAccelerationStructureGeometryInstancesDataKHR;
+import club.doki7.vulkan.datatype.VkAccelerationStructureGeometryKHR;
+import club.doki7.vulkan.datatype.VkAccelerationStructureGeometryTrianglesDataKHR;
+import club.doki7.vulkan.datatype.VkApplicationInfo;
+import club.doki7.vulkan.datatype.VkBufferCreateInfo;
+import club.doki7.vulkan.datatype.VkBufferDeviceAddressInfo;
+import club.doki7.vulkan.datatype.VkCommandBufferAllocateInfo;
+import club.doki7.vulkan.datatype.VkCommandBufferBeginInfo;
+import club.doki7.vulkan.datatype.VkCommandPoolCreateInfo;
+import club.doki7.vulkan.datatype.VkDebugUtilsMessengerCreateInfoEXT;
+import club.doki7.vulkan.datatype.VkDescriptorImageInfo;
+import club.doki7.vulkan.datatype.VkDescriptorPoolCreateInfo;
+import club.doki7.vulkan.datatype.VkDescriptorPoolSize;
+import club.doki7.vulkan.datatype.VkDescriptorSetAllocateInfo;
+import club.doki7.vulkan.datatype.VkDescriptorSetLayoutBinding;
+import club.doki7.vulkan.datatype.VkDescriptorSetLayoutCreateInfo;
+import club.doki7.vulkan.datatype.VkDeviceCreateInfo;
+import club.doki7.vulkan.datatype.VkDeviceQueueCreateInfo;
+import club.doki7.vulkan.datatype.VkExtensionProperties;
+import club.doki7.vulkan.datatype.VkExtent2D;
+import club.doki7.vulkan.datatype.VkExtent3D;
+import club.doki7.vulkan.datatype.VkFenceCreateInfo;
+import club.doki7.vulkan.datatype.VkImageCopy;
+import club.doki7.vulkan.datatype.VkImageCreateInfo;
+import club.doki7.vulkan.datatype.VkImageMemoryBarrier;
+import club.doki7.vulkan.datatype.VkImageViewCreateInfo;
+import club.doki7.vulkan.datatype.VkInstanceCreateInfo;
+import club.doki7.vulkan.datatype.VkLayerProperties;
+import club.doki7.vulkan.datatype.VkMemoryAllocateFlagsInfo;
+import club.doki7.vulkan.datatype.VkMemoryAllocateInfo;
+import club.doki7.vulkan.datatype.VkMemoryBarrier;
+import club.doki7.vulkan.datatype.VkMemoryRequirements;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceAccelerationStructureFeaturesKHR;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceAccelerationStructurePropertiesKHR;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceCoherentMemoryFeaturesAMD;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceFeatures;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceMemoryProperties;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceProperties;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceProperties2;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceRayTracingPipelineFeaturesKHR;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
+import club.doki7.vulkan.datatype.VkPhysicalDeviceVulkan12Features;
+import club.doki7.vulkan.datatype.VkPipelineLayoutCreateInfo;
+import club.doki7.vulkan.datatype.VkPipelineShaderStageCreateInfo;
+import club.doki7.vulkan.datatype.VkPresentInfoKHR;
+import club.doki7.vulkan.datatype.VkPushConstantRange;
+import club.doki7.vulkan.datatype.VkQueueFamilyProperties;
+import club.doki7.vulkan.datatype.VkRayTracingPipelineCreateInfoKHR;
+import club.doki7.vulkan.datatype.VkRayTracingShaderGroupCreateInfoKHR;
+import club.doki7.vulkan.datatype.VkSemaphoreCreateInfo;
+import club.doki7.vulkan.datatype.VkShaderModuleCreateInfo;
+import club.doki7.vulkan.datatype.VkStridedDeviceAddressRegionKHR;
+import club.doki7.vulkan.datatype.VkSubmitInfo;
+import club.doki7.vulkan.datatype.VkSurfaceCapabilitiesKHR;
+import club.doki7.vulkan.datatype.VkSurfaceFormatKHR;
+import club.doki7.vulkan.datatype.VkSwapchainCreateInfoKHR;
+import club.doki7.vulkan.datatype.VkWriteDescriptorSet;
+import club.doki7.vulkan.datatype.VkWriteDescriptorSetAccelerationStructureKHR;
+import club.doki7.vulkan.enumtype.VkAccelerationStructureBuildTypeKHR;
+import club.doki7.vulkan.enumtype.VkAccelerationStructureTypeKHR;
+import club.doki7.vulkan.enumtype.VkBuildAccelerationStructureModeKHR;
+import club.doki7.vulkan.enumtype.VkColorSpaceKHR;
+import club.doki7.vulkan.enumtype.VkCommandBufferLevel;
+import club.doki7.vulkan.enumtype.VkDescriptorType;
+import club.doki7.vulkan.enumtype.VkFormat;
+import club.doki7.vulkan.enumtype.VkGeometryTypeKHR;
+import club.doki7.vulkan.enumtype.VkImageLayout;
+import club.doki7.vulkan.enumtype.VkImageTiling;
+import club.doki7.vulkan.enumtype.VkImageType;
+import club.doki7.vulkan.enumtype.VkImageViewType;
+import club.doki7.vulkan.enumtype.VkIndexType;
+import club.doki7.vulkan.enumtype.VkPipelineBindPoint;
+import club.doki7.vulkan.enumtype.VkPresentModeKHR;
+import club.doki7.vulkan.enumtype.VkRayTracingShaderGroupTypeKHR;
+import club.doki7.vulkan.enumtype.VkResult;
+import club.doki7.vulkan.enumtype.VkSharingMode;
+import club.doki7.vulkan.enumtype.VkStructureType;
+import club.doki7.vulkan.handle.VkAccelerationStructureKHR;
+import club.doki7.vulkan.handle.VkBuffer;
+import club.doki7.vulkan.handle.VkCommandBuffer;
+import club.doki7.vulkan.handle.VkCommandPool;
+import club.doki7.vulkan.handle.VkDebugUtilsMessengerEXT;
+import club.doki7.vulkan.handle.VkDescriptorPool;
+import club.doki7.vulkan.handle.VkDescriptorSet;
+import club.doki7.vulkan.handle.VkDescriptorSetLayout;
+import club.doki7.vulkan.handle.VkDevice;
+import club.doki7.vulkan.handle.VkDeviceMemory;
+import club.doki7.vulkan.handle.VkFence;
+import club.doki7.vulkan.handle.VkImage;
+import club.doki7.vulkan.handle.VkImageView;
+import club.doki7.vulkan.handle.VkInstance;
+import club.doki7.vulkan.handle.VkPhysicalDevice;
+import club.doki7.vulkan.handle.VkPipeline;
+import club.doki7.vulkan.handle.VkPipelineLayout;
+import club.doki7.vulkan.handle.VkQueue;
+import club.doki7.vulkan.handle.VkSemaphore;
+import club.doki7.vulkan.handle.VkShaderModule;
+import club.doki7.vulkan.handle.VkSurfaceKHR;
+import club.doki7.vulkan.handle.VkSwapchainKHR;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
+
+import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.util.Objects;
+
+import static club.doki7.ffm.NativeLayout.UINT64_MAX;
+import static tutorial.vulkan.raytracing.VulkanUtil.alignUp;
+import static tutorial.vulkan.raytracing.VulkanUtil.checkResult;
+import static tutorial.vulkan.raytracing.VulkanUtil.createImageBarrier;
+import static tutorial.vulkan.raytracing.VulkanUtil.createVmaBuffer;
+import static tutorial.vulkan.raytracing.VulkanUtil.populateDebugMessengerCreateInfo;
+
+/**
+ * Chapter 20 — Ray Tracing: Gradient Triangle on Black Background.
+ *
+ * <p>Renders a single triangle with vertex colors (red, green, blue)
+ * interpolated via barycentric coordinates, rendered through ray tracing.</p>
+ */
+public class Application {
+
+    // ======================== Window Configuration ========================
+    private static final int WIDTH = 1280;
+    private static final int HEIGHT = 720;
+    private static final BytePtr WINDOW_TITLE = BytePtr.allocateString(Arena.global(), "Chapter 20 - Ray Traced Gradient Triangle");
+
+    // ======================== Validation Layers ========================
+    private static final boolean ENABLE_VALIDATION_LAYERS = System.getProperty("validation") != null;
+    private static final String VALIDATION_LAYER_NAME = "VK_LAYER_KHRONOS_validation";
+
+    // ======================== Frame & Sync ========================
+    private static final int MAX_FRAMES_IN_FLIGHT = 2;
+
+    // ======================== Camera Parameters ========================
+    private static final float CAMERA_FOV = 60.0f;
+    private static final float CAMERA_NEAR = 0.1f;
+    private static final float CAMERA_FAR = 100.0f;
+    private static final float CAMERA_POSITION_Z = 5.0f;
+
+    // ======================== Vertex & Geometry ========================
+    private static final int VERTEX_STRIDE_BYTES = 12; // 3 floats * 4 bytes
+
+    // ======================== Instance Layout (64 bytes) ========================
+    private static final int INSTANCE_STRUCT_SIZE = 64;
+    private static final int INSTANCE_TRANSFORM_FLOAT_COUNT = 12;
+    private static final int INSTANCE_CUSTOM_INDEX_MASK_OFFSET = 48;
+    private static final int INSTANCE_SBT_OFFSET_FLAGS_OFFSET = 52;
+    private static final int INSTANCE_ACCEL_REF_OFFSET = 56;
+    private static final int INSTANCE_MASK_SHIFT = 24;
+    private static final int INSTANCE_FLAGS_SHIFT = 24;
+
+    // ======================== Push Constants ========================
+    private static final int MATRIX4F_FLOAT_COUNT = 16;
+    private static final int PUSH_CONSTANT_FLOAT_COUNT = MATRIX4F_FLOAT_COUNT * 2; // invProj + invView
+    private static final int PUSH_CONSTANT_SIZE_BYTES = PUSH_CONSTANT_FLOAT_COUNT * Float.BYTES;
+
+    // ======================== Alignment & Padding ========================
+    private static final int MIN_BUFFER_PADDING = 4096;
+    private static final int TRANSFORM_BUFFER_MIN_SIZE = 256;
+    private static final int SBT_REGION_PADDING = 4096;
+
+    // ======================== GPU Vendor IDs ========================
+    private static final int VENDOR_ID_AMD = 0x1002;
+
+    // ======================== Ray Tracing Properties (cached once) ========================
+    private VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProps;
+    private int handleSize;
+    private int handleAlignment;
+    private int shaderGroupBaseAlignment;
+    private int sbtRecordSize;
+    private long raygenAddress;
+    private long missAddress;
+    private long hitAddress;
+
+    // ======================== Core Vulkan Handles ========================
+    private GLFWwindow window;
+    private VkStaticCommands staticCommands;
+    private VkEntryCommands entryCommands;
+    private VkInstance instance;
+    private VkInstanceCommands instanceCommands;
+    private VkDebugUtilsMessengerEXT debugMessenger;
+    private VkSurfaceKHR surface;
+    private VkPhysicalDevice physicalDevice;
+    private VkDevice device;
+    private VkDeviceCommands deviceCommands;
+    private VkQueue graphicsQueue;
+    private VkQueue presentQueue;
+
+    // ======================== Swapchain ========================
+    private VkSwapchainKHR swapChain;
+    private VkImage.Ptr swapChainImages;
+    private @EnumType(VkFormat.class) int swapChainImageFormat;
+    private VkExtent2D swapChainExtent;
+    private VkImageView.Ptr swapChainImageViews;
+    private Arena swapchainArena = Arena.ofShared();
+
+    // ======================== Ray Tracing Resources ========================
+    private VkBuffer vertexBuffer;
+    private VmaAllocation vertexBufferAllocation;
+    private VkBuffer blasBuffer;
+    private VmaAllocation blasAllocation;
+    private VkBuffer tlasBuffer;
+    private VmaAllocation tlasAllocation;
+    private VkAccelerationStructureKHR blas;
+    private VkAccelerationStructureKHR tlas;
+    private VkImage outputImage;
+    private VmaAllocation outputImageAllocation;
+    private VkImageView outputImageView;
+    private VkDescriptorSetLayout descriptorSetLayout;
+    private VkPipelineLayout pipelineLayout;
+    private VkPipeline rayTracingPipeline;
+    private VkDescriptorPool descriptorPool;
+    private VkDescriptorSet descriptorSet;
+    private VkBuffer sbtBuffer;
+    private VmaAllocation sbtAllocation;
+
+    // ======================== VMA ========================
+    private VmaAllocator vmaAllocator;
+
+    // ======================== Synchronization ========================
+    private VkSemaphore[] imageAvailableSemaphores;
+    private VkSemaphore[] renderFinishedSemaphores;
+    private VkFence[] inFlightFences;
+    private VkCommandPool commandPool;
+    private VkCommandBuffer[] commandBuffers;
+    private int currentFrame = 0;
+    private boolean framebufferResized = false;
+    private boolean needsSwapchainRecreation = false;
+
+    // ======================== Native Libraries ========================
+    private static final ISharedLibrary libGLFW = GLFWLoader.loadGLFWLibrary();
+    private static final GLFW glfw = GLFWLoader.loadGLFW(libGLFW);
+    private static final ISharedLibrary libVulkan = VulkanLoader.loadVulkanLibrary();
+    private static final ISharedLibrary libVMA = ILibraryLoader.platformLoader().loadLibrary("vma");
+    private static final VMA vma = new VMA(libVMA);
+
+    // ======================== Entry Point ========================
+    public void run() {
+        initWindow();
+        initVulkan();
+        mainLoop();
+        cleanup();
+    }
+
+    private void initWindow() {
+        if (glfw.init() != GLFW.TRUE) throw new RuntimeException("Failed to initialize GLFW");
+        if (glfw.vulkanSupported() != GLFW.TRUE) throw new RuntimeException("Vulkan is not supported");
+        glfw.windowHint(GLFW.CLIENT_API, GLFW.NO_API);
+        window = Objects.requireNonNull(glfw.createWindow(WIDTH, HEIGHT, WINDOW_TITLE, null, null));
+        glfw.setFramebufferSizeCallback(window, (_, width, height) -> {
+            if (width > 0 && height > 0) framebufferResized = true;
+        });
+    }
+
+    private void initVulkan() {
+        staticCommands = VulkanLoader.loadStaticCommands(libVulkan);
+        entryCommands = VulkanLoader.loadEntryCommands(staticCommands);
+        createInstance();
+        setupDebugMessenger();
+        createSurface();
+        pickPhysicalDevice();
+        createLogicalDevice();
+        createVMA();
+        createCommandPool();
+        createSwapchain();
+        createImageViews();
+        createOutputImage();
+        createVertexBuffer();
+        createAccelerationStructures();
+        createDescriptorSetLayout();
+        createDescriptorPool();
+        createDescriptorSet();
+        createRayTracingPipeline();
+        createSyncObjects();
+        createShaderBindingTable();
+        createCommandBuffers();
+        transitionOutputImageToGeneral();
+    }
+
+    private void mainLoop() {
+        while (glfw.windowShouldClose(window) == GLFW.FALSE) {
+            glfw.pollEvents();
+            if (needsSwapchainRecreation) {
+                recreateSwapChain();
+                needsSwapchainRecreation = false;
+                continue;
+            }
+            if (swapChainExtent.width() <= 0 || swapChainExtent.height() <= 0) {
+                glfw.waitEvents();
+                handleMinimizedWindow();
+                continue;
+            }
+            try {
+                drawFrame();
+            } catch (RuntimeException e) {
+                System.err.println("Render error: %s".formatted(e.getMessage()));
+                needsSwapchainRecreation = true;
+            }
+        }
+        deviceCommands.deviceWaitIdle(device);
+    }
+
+    private void cleanup() {
+        deviceCommands.deviceWaitIdle(device);
+
+        if (commandPool != null) {
+            deviceCommands.destroyCommandPool(device, commandPool, null);
+            commandPool = null;
+        }
+
+        if (sbtBuffer != null) {
+            vma.destroyBuffer(vmaAllocator, sbtBuffer, sbtAllocation);
+            sbtBuffer = null;
+            sbtAllocation = null;
+        }
+
+        if (rayTracingPipeline != null) {
+            deviceCommands.destroyPipeline(device, rayTracingPipeline, null);
+            rayTracingPipeline = null;
+        }
+        if (pipelineLayout != null) {
+            deviceCommands.destroyPipelineLayout(device, pipelineLayout, null);
+            pipelineLayout = null;
+        }
+
+        if (descriptorPool != null) {
+            deviceCommands.destroyDescriptorPool(device, descriptorPool, null);
+            descriptorPool = null;
+            descriptorSet = null;
+        }
+        if (descriptorSetLayout != null) {
+            deviceCommands.destroyDescriptorSetLayout(device, descriptorSetLayout, null);
+            descriptorSetLayout = null;
+        }
+
+        if (blas != null) {
+            deviceCommands.destroyAccelerationStructureKHR(device, blas, null);
+            blas = null;
+        }
+        if (tlas != null) {
+            deviceCommands.destroyAccelerationStructureKHR(device, tlas, null);
+            tlas = null;
+        }
+
+        if (blasBuffer != null) {
+            vma.destroyBuffer(vmaAllocator, blasBuffer, blasAllocation);
+            blasBuffer = null;
+            blasAllocation = null;
+        }
+        if (tlasBuffer != null) {
+            vma.destroyBuffer(vmaAllocator, tlasBuffer, tlasAllocation);
+            tlasBuffer = null;
+            tlasAllocation = null;
+        }
+
+        if (vertexBuffer != null) {
+            vma.destroyBuffer(vmaAllocator, vertexBuffer, vertexBufferAllocation);
+            vertexBuffer = null;
+            vertexBufferAllocation = null;
+        }
+
+        if (outputImageView != null) {
+            deviceCommands.destroyImageView(device, outputImageView, null);
+            outputImageView = null;
+        }
+        if (outputImage != null) {
+            vma.destroyImage(vmaAllocator, outputImage, outputImageAllocation);
+            outputImage = null;
+            outputImageAllocation = null;
+        }
+
+        cleanupSwapChain();
+
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            if (inFlightFences[i] != null) {
+                deviceCommands.destroyFence(device, inFlightFences[i], null);
+                inFlightFences[i] = null;
+            }
+            if (imageAvailableSemaphores[i] != null) {
+                deviceCommands.destroySemaphore(device, imageAvailableSemaphores[i], null);
+                imageAvailableSemaphores[i] = null;
+            }
+            if (renderFinishedSemaphores[i] != null) {
+                deviceCommands.destroySemaphore(device, renderFinishedSemaphores[i], null);
+                renderFinishedSemaphores[i] = null;
+            }
+        }
+
+        // VMA allocator — SKIP (VMA internal pool issue)
+        vmaAllocator = null;
+
+        if (device != null) {
+            deviceCommands.destroyDevice(device, null);
+            device = null;
+        }
+        if (surface != null) {
+            instanceCommands.destroySurfaceKHR(instance, surface, null);
+            surface = null;
+        }
+        if (ENABLE_VALIDATION_LAYERS && debugMessenger != null) {
+            instanceCommands.destroyDebugUtilsMessengerEXT(instance, debugMessenger, null);
+            debugMessenger = null;
+        }
+        if (instance != null) {
+            instanceCommands.destroyInstance(instance, null);
+            instance = null;
+        }
+
+        glfw.destroyWindow(window);
+        glfw.terminate();
+    }
+
+    // ======================== Instance Creation ========================
+    private void createInstance() {
+        try (var arena = Arena.ofConfined()) {
+            if (ENABLE_VALIDATION_LAYERS && !checkValidationLayerSupport()) {
+                throw new RuntimeException("Validation layers requested, but not available");
+            }
+            var appInfo = VkApplicationInfo.allocate(arena)
+                    .pApplicationName(BytePtr.allocateString(arena, "Ch20 Ray Tracing"))
+                    .applicationVersion(new Version(0, 1, 0, 0).encode())
+                    .pEngineName(BytePtr.allocateString(arena, "No Engine"))
+                    .engineVersion(new Version(0, 1, 0, 0).encode())
+                    .apiVersion(Version.VK_API_VERSION_1_2.encode());
+
+            var instanceCreateInfo = VkInstanceCreateInfo.allocate(arena).pApplicationInfo(appInfo);
+
+            if (ENABLE_VALIDATION_LAYERS) {
+                instanceCreateInfo.enabledLayerCount(1)
+                        .ppEnabledLayerNames(PointerPtr.allocateStrings(arena, VALIDATION_LAYER_NAME));
+                var debugCreateInfo = VkDebugUtilsMessengerCreateInfoEXT.allocate(arena);
+                populateDebugMessengerCreateInfo(debugCreateInfo);
+                instanceCreateInfo.pNext(debugCreateInfo);
+            }
+
+            var extensions = getRequiredExtensions(arena);
+            instanceCreateInfo.enabledExtensionCount((int) extensions.size())
+                    .ppEnabledExtensionNames(extensions);
+
+            var pInstance = VkInstance.Ptr.allocate(arena);
+            var result = entryCommands.createInstance(instanceCreateInfo, null, pInstance);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create instance: " + VkResult.explain(result));
+            instance = Objects.requireNonNull(pInstance.read());
+            instanceCommands = VulkanLoader.loadInstanceCommands(instance, staticCommands);
+        }
+    }
+
+    private boolean checkValidationLayerSupport() {
+        try (var arena = Arena.ofConfined()) {
+            var pCount = IntPtr.allocate(arena);
+            entryCommands.enumerateInstanceLayerProperties(pCount, null);
+            var count = pCount.read();
+            var layers = VkLayerProperties.allocate(arena, count);
+            entryCommands.enumerateInstanceLayerProperties(pCount, layers);
+            for (var layer : layers) {
+                if (VALIDATION_LAYER_NAME.equals(layer.layerName().readString())) return true;
+            }
+            return false;
+        }
+    }
+
+    private PointerPtr getRequiredExtensions(Arena arena) {
+        try (var local = Arena.ofConfined()) {
+            var pCount = IntPtr.allocate(local);
+            var extensions = glfw.getRequiredInstanceExtensions(pCount);
+            if (extensions == null) throw new RuntimeException("Failed to get GLFW required extensions");
+            var count = pCount.read();
+            extensions = extensions.reinterpret(count);
+            var all = PointerPtr.allocate(arena, count + 1 + (ENABLE_VALIDATION_LAYERS ? 1 : 0));
+            for (int i = 0; i < count; i++) all.write(i, extensions.read(i));
+            int idx = count;
+            all.write(idx++, BytePtr.allocateString(arena, VkConstants.KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME));
+            if (ENABLE_VALIDATION_LAYERS) {
+                all.write(idx++, BytePtr.allocateString(arena, VkConstants.EXT_DEBUG_UTILS_EXTENSION_NAME));
+            }
+            return all;
+        }
+    }
+
+    private void setupDebugMessenger() {
+        if (!ENABLE_VALIDATION_LAYERS) return;
+        try (var arena = Arena.ofConfined()) {
+            var createInfo = VkDebugUtilsMessengerCreateInfoEXT.allocate(arena);
+            populateDebugMessengerCreateInfo(createInfo);
+            var pMessenger = VkDebugUtilsMessengerEXT.Ptr.allocate(arena);
+            var result = instanceCommands.createDebugUtilsMessengerEXT(instance, createInfo, null, pMessenger);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to set up debug messenger: " + VkResult.explain(result));
+            debugMessenger = Objects.requireNonNull(pMessenger.read());
+        }
+    }
+
+    private void createSurface() {
+        try (var arena = Arena.ofConfined()) {
+            var pSurface = VkSurfaceKHR.Ptr.allocate(arena);
+            var result = glfw.createWindowSurface(instance, window, null, pSurface);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create surface: " + VkResult.explain(result));
+            surface = Objects.requireNonNull(pSurface.read());
+        }
+    }
+
+    // ======================== Physical Device ========================
+    private void pickPhysicalDevice() {
+        try (var arena = Arena.ofConfined()) {
+            var pCount = IntPtr.allocate(arena);
+            var result = instanceCommands.enumeratePhysicalDevices(instance, pCount, null);
+            checkResult(result, "Failed to enumerate physical devices");
+            int count = pCount.read();
+            if (count == 0) throw new RuntimeException("No GPUs with Vulkan support");
+            var devices = VkPhysicalDevice.Ptr.allocate(arena, count);
+            result = instanceCommands.enumeratePhysicalDevices(instance, pCount, devices);
+            checkResult(result, "Failed to enumerate physical devices");
+            for (var dev : devices) {
+                if (isDeviceSuitable(dev)) {
+                    physicalDevice = dev;
+                    checkGpuVendor(physicalDevice);
+                    return;
+                }
+            }
+            if (physicalDevice == null) throw new RuntimeException("No suitable GPU found");
+        }
+    }
+
+    private void checkGpuVendor(VkPhysicalDevice device) {
+        try (var arena = Arena.ofConfined()) {
+            var props = VkPhysicalDeviceProperties.allocate(arena);
+            instanceCommands.getPhysicalDeviceProperties(device, props);
+            if (props.vendorID() == VENDOR_ID_AMD) {
+                System.setProperty("AMD_FORCE_VULKAN_RAY_TRACING", "1");
+                System.setProperty("AMD_RAY_TRACING_DEBUG", "1");
+            }
+        }
+    }
+
+    private boolean isDeviceSuitable(VkPhysicalDevice device) {
+        var indices = findQueueFamilies(device);
+        if (indices == null) return false;
+        return checkDeviceExtensionSupport(device, new String[]{
+                VkConstants.KHR_SWAPCHAIN_EXTENSION_NAME,
+                VkConstants.KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+                VkConstants.KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                VkConstants.KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+                VkConstants.AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME
+        });
+    }
+
+    private boolean checkDeviceExtensionSupport(VkPhysicalDevice device, String[] required) {
+        try (var arena = Arena.ofConfined()) {
+            var pCount = IntPtr.allocate(arena);
+            instanceCommands.enumerateDeviceExtensionProperties(device, null, pCount, null);
+            var count = pCount.read();
+            var exts = VkExtensionProperties.allocate(arena, count);
+            instanceCommands.enumerateDeviceExtensionProperties(device, null, pCount, exts);
+            for (String req : required) {
+                boolean found = false;
+                for (var ext : exts) {
+                    if (req.equals(ext.extensionName().readString())) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) return false;
+            }
+            return true;
+        }
+    }
+
+    private record QueueFamilyIndices(int graphicsFamily, int presentFamily) {}
+
+    private QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
+        try (var arena = Arena.ofConfined()) {
+            var pQueueFamilyCount = IntPtr.allocate(arena);
+            instanceCommands.getPhysicalDeviceQueueFamilyProperties(device, pQueueFamilyCount, null);
+            var count = pQueueFamilyCount.read();
+            var queues = VkQueueFamilyProperties.allocate(arena, count);
+            instanceCommands.getPhysicalDeviceQueueFamilyProperties(device, pQueueFamilyCount, queues);
+            int g = -1, p = -1;
+            var support = IntPtr.allocate(arena);
+            for (int i = 0; i < count; i++) {
+                if ((queues.at(i).queueFlags() & VkQueueFlags.GRAPHICS) != 0) g = i;
+                if (instanceCommands.getPhysicalDeviceSurfaceSupportKHR(device, i, surface, support) == VkResult.SUCCESS
+                        && support.read() == VkConstants.TRUE) p = i;
+                if (g >= 0 && p >= 0) break;
+            }
+            return (g >= 0 && p >= 0) ? new QueueFamilyIndices(g, p) : null;
+        }
+    }
+
+    // ======================== Logical Device ========================
+    private void createLogicalDevice() {
+        var indices = findQueueFamilies(physicalDevice);
+        if (indices == null) throw new IllegalStateException("No suitable queue family indices found");
+        try (var arena = Arena.ofConfined()) {
+            var priorities = FloatPtr.allocateV(arena, 1.0f);
+            var queueCreateInfo = VkDeviceQueueCreateInfo.allocate(arena)
+                    .queueFamilyIndex(indices.graphicsFamily())
+                    .queueCount(1)
+                    .pQueuePriorities(priorities);
+
+            var physicalDeviceFeatures = VkPhysicalDeviceFeatures.allocate(arena);
+
+            var vulkan12Features = VkPhysicalDeviceVulkan12Features.allocate(arena)
+                    .sType(VkStructureType.PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
+                    .descriptorIndexing(VkConstants.TRUE)
+                    .shaderSampledImageArrayNonUniformIndexing(VkConstants.TRUE)
+                    .bufferDeviceAddress(VkConstants.TRUE)
+                    .bufferDeviceAddressCaptureReplay(VkConstants.TRUE);
+
+            var asFeatures = VkPhysicalDeviceAccelerationStructureFeaturesKHR.allocate(arena)
+                    .sType(VkStructureType.PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR)
+                    .accelerationStructure(VkConstants.TRUE)
+                    .accelerationStructureCaptureReplay(VkConstants.TRUE);
+
+            var rtPipelineFeatures = VkPhysicalDeviceRayTracingPipelineFeaturesKHR.allocate(arena)
+                    .sType(VkStructureType.PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR)
+                    .rayTracingPipeline(VkConstants.TRUE)
+                    .rayTracingPipelineShaderGroupHandleCaptureReplay(VkConstants.TRUE);
+
+            var coherentMemoryFeatures = VkPhysicalDeviceCoherentMemoryFeaturesAMD.allocate(arena)
+                    .sType(VkStructureType.PHYSICAL_DEVICE_COHERENT_MEMORY_FEATURES_AMD)
+                    .deviceCoherentMemory(VkConstants.TRUE);
+
+            vulkan12Features.pNext(asFeatures.segment());
+            asFeatures.pNext(rtPipelineFeatures.segment());
+            rtPipelineFeatures.pNext(coherentMemoryFeatures.segment());
+
+            rtProps = VkPhysicalDeviceRayTracingPipelinePropertiesKHR.allocate(Arena.global())
+                    .sType(VkStructureType.PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR);
+            var props2 = VkPhysicalDeviceProperties2.allocate(arena).pNext(rtProps.segment());
+            instanceCommands.getPhysicalDeviceProperties2(physicalDevice, props2);
+
+            handleSize = rtProps.shaderGroupHandleSize();
+            handleAlignment = rtProps.shaderGroupHandleAlignment();
+            shaderGroupBaseAlignment = rtProps.shaderGroupBaseAlignment();
+            sbtRecordSize = handleSize;
+
+            String[] deviceExtensions = {
+                    VkConstants.KHR_SWAPCHAIN_EXTENSION_NAME,
+                    VkConstants.KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+                    VkConstants.KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                    VkConstants.KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+                    VkConstants.KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+                    VkConstants.AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME
+            };
+
+            var deviceCreateInfo = VkDeviceCreateInfo.allocate(arena)
+                    .pQueueCreateInfos(queueCreateInfo)
+                    .queueCreateInfoCount(1)
+                    .pEnabledFeatures(physicalDeviceFeatures)
+                    .enabledExtensionCount(deviceExtensions.length)
+                    .ppEnabledExtensionNames(PointerPtr.allocateStrings(arena, deviceExtensions))
+                    .pNext(vulkan12Features.segment());
+
+            if (ENABLE_VALIDATION_LAYERS) {
+                deviceCreateInfo.enabledLayerCount(1)
+                        .ppEnabledLayerNames(PointerPtr.allocateStrings(arena, VALIDATION_LAYER_NAME));
+            }
+
+            var pDevice = VkDevice.Ptr.allocate(arena);
+            var result = instanceCommands.createDevice(physicalDevice, deviceCreateInfo, null, pDevice);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create logical device: " + VkResult.explain(result));
+            device = Objects.requireNonNull(pDevice.read());
+            deviceCommands = VulkanLoader.loadDeviceCommands(device, staticCommands);
+
+            var pQueue = VkQueue.Ptr.allocate(arena);
+            deviceCommands.getDeviceQueue(device, indices.graphicsFamily(), 0, pQueue);
+            graphicsQueue = Objects.requireNonNull(pQueue.read());
+            deviceCommands.getDeviceQueue(device, indices.presentFamily(), 0, pQueue);
+            presentQueue = Objects.requireNonNull(pQueue.read());
+        }
+    }
+
+    // ======================== VMA ========================
+    private void createVMA() {
+        try (var arena = Arena.ofConfined()) {
+            var funcs = VmaVulkanFunctions.allocate(arena);
+            VMAUtil.fillVulkanFunctions(funcs, staticCommands, entryCommands, instanceCommands, deviceCommands);
+            var info = VmaAllocatorCreateInfo.allocate(arena)
+                    .instance(instance)
+                    .physicalDevice(physicalDevice)
+                    .device(device)
+                    .vulkanApiVersion(Version.VK_API_VERSION_1_2.encode())
+                    .pVulkanFunctions(funcs)
+                    .flags(VmaAllocatorCreateFlags.BUFFER_DEVICE_ADDRESS);
+            var pAlloc = VmaAllocator.Ptr.allocate(arena);
+            var result = vma.createAllocator(info, pAlloc);
+            if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to create VMA allocator: " + VkResult.explain(result));
+            }
+            vmaAllocator = Objects.requireNonNull(pAlloc.read());
+        }
+    }
+
+    // NOTE: shaderc does NOT support ray tracing extensions (libshaderc uses old SPIR-V target).
+    // Using glslangValidator via ProcessBuilder instead.
+    // ======================== Sync Objects ========================
+    private void createSyncObjects() {
+        imageAvailableSemaphores = new VkSemaphore[MAX_FRAMES_IN_FLIGHT];
+        renderFinishedSemaphores = new VkSemaphore[MAX_FRAMES_IN_FLIGHT];
+        inFlightFences = new VkFence[MAX_FRAMES_IN_FLIGHT];
+        try (var arena = Arena.ofConfined()) {
+            var semInfo = VkSemaphoreCreateInfo.allocate(arena);
+            var fenceInfo = VkFenceCreateInfo.allocate(arena).flags(VkFenceCreateFlags.SIGNALED);
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                var pSem1 = VkSemaphore.Ptr.allocate(arena);
+                var result = deviceCommands.createSemaphore(device, semInfo, null, pSem1);
+                if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create semaphore: " + VkResult.explain(result));
+                imageAvailableSemaphores[i] = Objects.requireNonNull(pSem1.read());
+                var pSem2 = VkSemaphore.Ptr.allocate(arena);
+                result = deviceCommands.createSemaphore(device, semInfo, null, pSem2);
+                if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create semaphore: " + VkResult.explain(result));
+                renderFinishedSemaphores[i] = Objects.requireNonNull(pSem2.read());
+                var pFence = VkFence.Ptr.allocate(arena);
+                result = deviceCommands.createFence(device, fenceInfo, null, pFence);
+                if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create fence: " + VkResult.explain(result));
+                inFlightFences[i] = Objects.requireNonNull(pFence.read());
+            }
+        }
+    }
+
+    // ======================== Command Pool ========================
+    private void createCommandPool() {
+        try (var arena = Arena.ofConfined()) {
+            var indices = findQueueFamilies(physicalDevice);
+            var poolInfo = VkCommandPoolCreateInfo.allocate(arena)
+                    .flags(VkCommandPoolCreateFlags.RESET_COMMAND_BUFFER)
+                    .queueFamilyIndex(indices.graphicsFamily());
+            var pPool = VkCommandPool.Ptr.allocate(arena);
+            checkResult(deviceCommands.createCommandPool(device, poolInfo, null, pPool), "Failed to create command pool");
+            commandPool = Objects.requireNonNull(pPool.read());
+        }
+    }
+
+    // ======================== Swapchain ========================
+    private void createSwapchain() {
+        try (var arena = Arena.ofConfined()) {
+            var support = querySwapChainSupport(physicalDevice, arena);
+            var format = chooseSwapSurfaceFormat(support.formats());
+            var presentMode = chooseSwapPresentMode(support.presentModes());
+            var extent = chooseSwapExtent(support.capabilities(), arena);
+            var imageCount = Math.min(support.capabilities.maxImageCount(),
+                    Math.max(support.capabilities.minImageCount() + 1, 2));
+            var indices = findQueueFamilies(physicalDevice);
+            var createInfo = VkSwapchainCreateInfoKHR.allocate(arena)
+                    .surface(surface)
+                    .minImageCount(imageCount)
+                    .imageFormat(format.format())
+                    .imageColorSpace(format.colorSpace())
+                    .imageExtent(extent)
+                    .imageArrayLayers(1)
+                    .imageUsage(VkImageUsageFlags.COLOR_ATTACHMENT | VkImageUsageFlags.TRANSFER_DST);
+            if (indices.graphicsFamily() != indices.presentFamily()) {
+                var qfi = IntPtr.allocateV(arena, indices.graphicsFamily(), indices.presentFamily());
+                createInfo.imageSharingMode(VkSharingMode.CONCURRENT)
+                        .queueFamilyIndexCount(2)
+                        .pQueueFamilyIndices(qfi);
+            } else {
+                createInfo.imageSharingMode(VkSharingMode.EXCLUSIVE);
+            }
+            createInfo.preTransform(support.capabilities.currentTransform())
+                    .compositeAlpha(VkCompositeAlphaFlagsKHR.OPAQUE)
+                    .presentMode(presentMode)
+                    .clipped(VkConstants.TRUE);
+
+            var pSwapchain = VkSwapchainKHR.Ptr.allocate(arena);
+            var result = deviceCommands.createSwapchainKHR(device, createInfo, null, pSwapchain);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create swapchain: " + VkResult.explain(result));
+            swapChain = Objects.requireNonNull(pSwapchain.read());
+
+            var pCount = IntPtr.allocate(arena);
+            deviceCommands.getSwapchainImagesKHR(device, swapChain, pCount, null);
+            var count = pCount.read();
+            swapChainImages = VkImage.Ptr.allocate(swapchainArena, count);
+            deviceCommands.getSwapchainImagesKHR(device, swapChain, pCount, swapChainImages);
+            swapChainImageFormat = format.format();
+            swapChainExtent = VkExtent2D.clone(swapchainArena, extent);
+        }
+    }
+
+    private record SwapchainSupportDetails(VkSurfaceCapabilitiesKHR capabilities, VkSurfaceFormatKHR.Ptr formats, IntPtr presentModes) {}
+
+    private SwapchainSupportDetails querySwapChainSupport(VkPhysicalDevice dev, Arena arena) {
+        var caps = VkSurfaceCapabilitiesKHR.allocate(arena);
+        instanceCommands.getPhysicalDeviceSurfaceCapabilitiesKHR(dev, surface, caps);
+        try (var local = Arena.ofConfined()) {
+            var fcount = IntPtr.allocate(local);
+            instanceCommands.getPhysicalDeviceSurfaceFormatsKHR(dev, surface, fcount, null);
+            var formats = VkSurfaceFormatKHR.allocate(arena, fcount.read());
+            instanceCommands.getPhysicalDeviceSurfaceFormatsKHR(dev, surface, fcount, formats);
+            var pcount = IntPtr.allocate(local);
+            instanceCommands.getPhysicalDeviceSurfacePresentModesKHR(dev, surface, pcount, null);
+            var modes = IntPtr.allocate(arena, pcount.read());
+            instanceCommands.getPhysicalDeviceSurfacePresentModesKHR(dev, surface, pcount, modes);
+            return new SwapchainSupportDetails(caps, formats, modes);
+        }
+    }
+
+    private VkSurfaceFormatKHR chooseSwapSurfaceFormat(VkSurfaceFormatKHR.Ptr formats) {
+        for (var f : formats) {
+            if (f.format() == VkFormat.R8G8B8A8_UNORM && f.colorSpace() == VkColorSpaceKHR.SRGB_NONLINEAR) return f;
+        }
+        return formats.at(0);
+    }
+
+    private int chooseSwapPresentMode(IntPtr modes) {
+        for (int m : modes) {
+            if (m == VkPresentModeKHR.MAILBOX) return m;
+        }
+        return VkPresentModeKHR.FIFO;
+    }
+
+    private VkExtent2D chooseSwapExtent(VkSurfaceCapabilitiesKHR caps, Arena arena) {
+        if (caps.currentExtent().width() != NativeLayout.UINT32_MAX) {
+            int width = caps.currentExtent().width();
+            int height = caps.currentExtent().height();
+            return VkExtent2D.allocate(arena).width(width > 0 ? width : 1).height(height > 0 ? height : 1);
+        }
+        try (var local = Arena.ofConfined()) {
+            IntPtr w = IntPtr.allocate(local), h = IntPtr.allocate(local);
+            glfw.getFramebufferSize(window, w, h);
+            int width = w.read();
+            int height = h.read();
+            width = Math.max(1, width);
+            height = Math.max(1, height);
+            return VkExtent2D.allocate(arena)
+                    .width(Math.clamp(width, caps.minImageExtent().width(), caps.maxImageExtent().width()))
+                    .height(Math.clamp(height, caps.minImageExtent().height(), caps.maxImageExtent().height()));
+        }
+    }
+
+    private void createImageViews() {
+        swapChainImageViews = VkImageView.Ptr.allocate(swapchainArena, swapChainImages.size());
+        for (long i = 0; i < swapChainImages.size(); i++) {
+            swapChainImageViews.write(i, createImageView(
+                    swapChainImages.read(i), swapChainImageFormat, VkImageAspectFlags.COLOR, 1));
+        }
+    }
+
+    private VkImageView createImageView(VkImage image, int format, int aspect, int mipLevels) {
+        try (var arena = Arena.ofConfined()) {
+            var info = VkImageViewCreateInfo.allocate(arena)
+                    .image(image)
+                    .viewType(VkImageViewType._2D)
+                    .format(format)
+                    .subresourceRange(r -> r.aspectMask(aspect).levelCount(mipLevels).layerCount(1));
+            var pView = VkImageView.Ptr.allocate(arena);
+            var result = deviceCommands.createImageView(device, info, null, pView);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create image view: " + VkResult.explain(result));
+            return Objects.requireNonNull(pView.read());
+        }
+    }
+
+    private void cleanupSwapChain() {
+        if (swapChainImageViews != null) {
+            for (long i = 0; i < swapChainImageViews.size(); i++) {
+                var imageView = swapChainImageViews.read(i);
+                if (imageView != null) {
+                    deviceCommands.destroyImageView(device, imageView, null);
+                }
+            }
+            swapChainImageViews = null;
+        }
+        if (outputImageView != null) {
+            deviceCommands.destroyImageView(device, outputImageView, null);
+            outputImageView = null;
+        }
+        if (outputImage != null) {
+            vma.destroyImage(vmaAllocator, outputImage, outputImageAllocation);
+            outputImage = null;
+            outputImageAllocation = null;
+        }
+        if (swapChain != null) {
+            deviceCommands.destroySwapchainKHR(device, swapChain, null);
+            swapChain = null;
+        }
+        try { swapchainArena.close(); } catch (Exception ignored) {}
+        swapchainArena = Arena.ofShared();
+    }
+
+    private void recreateSwapChain() {
+        try (var arena = Arena.ofConfined()) {
+            IntPtr w = IntPtr.allocate(arena), h = IntPtr.allocate(arena);
+            glfw.getFramebufferSize(window, w, h);
+            int width = w.read();
+            int height = h.read();
+            if (width <= 0 || height <= 0) return;
+        }
+        deviceCommands.deviceWaitIdle(device);
+        if (commandPool != null) {
+            deviceCommands.resetCommandPool(device, commandPool, 0);
+        }
+        cleanupSwapChain();
+        try {
+            createSwapchain();
+            createImageViews();
+            createOutputImage();
+            transitionOutputImageToGeneral();
+            recreateDescriptorPool();
+            createDescriptorSet();
+        } catch (RuntimeException e) {
+            System.err.println("Failed to recreate swapchain: " + e.getMessage());
+            needsSwapchainRecreation = true;
+        }
+    }
+
+    // ======================== Output Image ========================
+    private void createOutputImage() {
+        try (var arena = Arena.ofConfined()) {
+            int width = Math.max(1, swapChainExtent.width());
+            int height = Math.max(1, swapChainExtent.height());
+            var imageInfo = VkImageCreateInfo.allocate(arena)
+                    .imageType(VkImageType._2D)
+                    .format(VkFormat.R8G8B8A8_UNORM)
+                    .extent(VkExtent3D.allocate(arena).width(width).height(height).depth(1))
+                    .mipLevels(1)
+                    .arrayLayers(1)
+                    .samples(VkSampleCountFlags._1)
+                    .tiling(VkImageTiling.OPTIMAL)
+                    .usage(VkImageUsageFlags.STORAGE | VkImageUsageFlags.TRANSFER_SRC | VkImageUsageFlags.TRANSFER_DST)
+                    .initialLayout(VkImageLayout.UNDEFINED);
+            var allocInfo = VmaAllocationCreateInfo.allocate(arena).usage(VmaMemoryUsage.GPU_ONLY);
+            var pImage = VkImage.Ptr.allocate(arena);
+            var pAlloc = VmaAllocation.Ptr.allocate(arena);
+            checkResult(vma.createImage(vmaAllocator, imageInfo, allocInfo, pImage, pAlloc, null), "Failed to create output image");
+            outputImage = Objects.requireNonNull(pImage.read());
+            outputImageAllocation = Objects.requireNonNull(pAlloc.read());
+
+            var viewInfo = VkImageViewCreateInfo.allocate(arena)
+                    .image(outputImage)
+                    .viewType(VkImageViewType._2D)
+                    .format(VkFormat.R8G8B8A8_UNORM)
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1));
+            var pView = VkImageView.Ptr.allocate(arena);
+            checkResult(deviceCommands.createImageView(device, viewInfo, null, pView), "Failed to create output image view");
+            outputImageView = Objects.requireNonNull(pView.read());
+        }
+    }
+
+    private void transitionOutputImageToGeneral() {
+        try (var arena = Arena.ofConfined()) {
+            var bundle = beginSingleTimeCommands();
+            var barrier = createImageBarrier(arena, outputImage,
+                    VkImageLayout.UNDEFINED, VkImageLayout.GENERAL, 0, 0);
+            deviceCommands.cmdPipelineBarrier(bundle.cmd,
+                    VkPipelineStageFlags.TOP_OF_PIPE, VkPipelineStageFlags.FRAGMENT_SHADER,
+                    0, 0, null, 0, null, 1, barrier);
+            endSingleTimeCommands(bundle);
+        }
+    }
+
+    // ======================== Vertex Buffer ========================
+    private void createVertexBuffer() {
+        float[] vertices = {
+                0.0f,  2.0f, 0.0f,
+               -2.0f, -2.0f, 0.0f,
+                2.0f, -2.0f, 0.0f
+        };
+        try (var arena = Arena.ofConfined()) {
+            var size = vertices.length * Float.BYTES;
+
+            var bufferPair = createVmaBuffer(vma, vmaAllocator, arena, size,
+                    VkBufferUsageFlags.VERTEX_BUFFER | VkBufferUsageFlags.SHADER_DEVICE_ADDRESS | VkBufferUsageFlags.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                    VmaAllocationCreateFlags.HOST_ACCESS_SEQUENTIAL_WRITE,
+                    VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT);
+            vertexBuffer = bufferPair.buffer();
+            vertexBufferAllocation = bufferPair.allocation();
+
+            var ppData = PointerPtr.allocate(arena);
+            vma.mapMemory(vmaAllocator, vertexBufferAllocation, ppData);
+            var seg = ppData.read().reinterpret(size);
+            for (int i = 0; i < vertices.length; i++) {
+                seg.set(java.lang.foreign.ValueLayout.JAVA_FLOAT, i * Float.BYTES, vertices[i]);
+            }
+            vma.unmapMemory(vmaAllocator, vertexBufferAllocation);
+        }
+    }
+
+    // ======================== Acceleration Structures ========================
+    private record CommandBundle(VkCommandBuffer cmd, VkCommandPool pool) {}
+
+    private void createAccelerationStructures() {
+        long vertexAddress = getBufferDeviceAddress(vertexBuffer);
+        try (var arena = Arena.ofConfined()) {
+            var asProps = VkPhysicalDeviceAccelerationStructurePropertiesKHR.allocate(arena)
+                    .sType(VkStructureType.PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR);
+            var props2 = VkPhysicalDeviceProperties2.allocate(arena).pNext(asProps.segment());
+            instanceCommands.getPhysicalDeviceProperties2(physicalDevice, props2);
+            int alignment = asProps.minAccelerationStructureScratchOffsetAlignment();
+
+            long blasAddress = createAndBuildBlas(arena, vertexAddress, alignment);
+            createAndBuildTlas(arena, blasAddress, alignment);
+        }
+    }
+
+    private long getBufferDeviceAddress(VkBuffer buffer) {
+        try (var arena = Arena.ofConfined()) {
+            var info = VkBufferDeviceAddressInfo.allocate(arena)
+                    .sType(VkStructureType.BUFFER_DEVICE_ADDRESS_INFO)
+                    .buffer(buffer);
+            return deviceCommands.getBufferDeviceAddress(device, info);
+        }
+    }
+
+    private long createAndBuildBlas(Arena arena, long vertexAddress, int alignment) {
+        int[] indices = {0, 1, 2};
+        var indexSize = indices.length * Integer.BYTES;
+        var indexPaddedSize = Math.max(indexSize, MIN_BUFFER_PADDING);
+
+        var indexResult = createVmaBuffer(vma, vmaAllocator, arena, indexPaddedSize,
+                VkBufferUsageFlags.SHADER_DEVICE_ADDRESS | VkBufferUsageFlags.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                VmaAllocationCreateFlags.HOST_ACCESS_SEQUENTIAL_WRITE,
+                VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT);
+        var localIndexBuffer = indexResult.buffer();
+        var localIndexAllocation = indexResult.allocation();
+
+        var ppIdxData = PointerPtr.allocate(arena);
+        vma.mapMemory(vmaAllocator, localIndexAllocation, ppIdxData);
+        var idxSeg = ppIdxData.read().reinterpret(indexSize);
+        for (int i = 0; i < indices.length; i++) {
+            idxSeg.set(java.lang.foreign.ValueLayout.JAVA_INT, i * Integer.BYTES, indices[i]);
+        }
+        vma.unmapMemory(vmaAllocator, localIndexAllocation);
+
+        long indexAddress = getBufferDeviceAddress(localIndexBuffer);
+
+        float[] transform = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+        var transformSize = transform.length * Float.BYTES;
+        var transformPaddedSize = alignUp(Math.max(transformSize, TRANSFORM_BUFFER_MIN_SIZE), 16);
+
+        var transformResult = createVmaBuffer(vma, vmaAllocator, arena, transformPaddedSize,
+                VkBufferUsageFlags.SHADER_DEVICE_ADDRESS | VkBufferUsageFlags.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                VmaAllocationCreateFlags.HOST_ACCESS_SEQUENTIAL_WRITE,
+                VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT);
+        var localTransformBuffer = transformResult.buffer();
+        var localTransformAllocation = transformResult.allocation();
+
+        var ppTransformData = PointerPtr.allocate(arena);
+        vma.mapMemory(vmaAllocator, localTransformAllocation, ppTransformData);
+        var transformSeg = ppTransformData.read().reinterpret(transformSize);
+        for (int i = 0; i < transform.length; i++) {
+            transformSeg.set(java.lang.foreign.ValueLayout.JAVA_FLOAT, i * Float.BYTES, transform[i]);
+        }
+        vma.unmapMemory(vmaAllocator, localTransformAllocation);
+
+        long transformAddress = getBufferDeviceAddress(localTransformBuffer);
+
+        deviceCommands.deviceWaitIdle(device);
+
+        var triangles = VkAccelerationStructureGeometryTrianglesDataKHR.allocate(arena)
+                .sType(VkStructureType.ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR)
+                .vertexFormat(VkFormat.R32G32B32_SFLOAT)
+                .vertexData(vd -> vd.deviceAddress(vertexAddress))
+                .vertexStride(VERTEX_STRIDE_BYTES)
+                .maxVertex(2)
+                .indexType(VkIndexType.UINT32)
+                .indexData(vd -> vd.deviceAddress(indexAddress))
+                .transformData(vd -> vd.deviceAddress(0));
+
+        var geometry = VkAccelerationStructureGeometryKHR.allocate(arena)
+                .sType(VkStructureType.ACCELERATION_STRUCTURE_GEOMETRY_KHR)
+                .geometryType(VkGeometryTypeKHR.TRIANGLES)
+                .geometry(d -> d.triangles(triangles))
+                .flags(VkGeometryFlagsKHR.OPAQUE);
+
+        var buildInfo = VkAccelerationStructureBuildGeometryInfoKHR.allocate(arena)
+                .sType(VkStructureType.ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR)
+                .type(VkAccelerationStructureTypeKHR.BOTTOM_LEVEL)
+                .flags(VkBuildAccelerationStructureFlagsKHR.PREFER_FAST_TRACE | VkBuildAccelerationStructureFlagsKHR.ALLOW_UPDATE)
+                .mode(VkBuildAccelerationStructureModeKHR.BUILD)
+                .geometryCount(1)
+                .pGeometries(geometry);
+
+        var buildRangeInfo = VkAccelerationStructureBuildRangeInfoKHR.allocate(arena)
+                .primitiveCount(1).primitiveOffset(0).firstVertex(0).transformOffset(0);
+        var ppBuildRangeInfo = PointerPtr.allocate(arena);
+        ppBuildRangeInfo.write(buildRangeInfo);
+
+        var maxPrimCount = IntPtr.allocate(arena, 1);
+        maxPrimCount.write(0, 1);
+        var sizeInfo = VkAccelerationStructureBuildSizesInfoKHR.allocate(arena);
+        deviceCommands.getAccelerationStructureBuildSizesKHR(device, VkAccelerationStructureBuildTypeKHR.DEVICE, buildInfo, maxPrimCount, sizeInfo);
+
+        long blasSize = sizeInfo.accelerationStructureSize();
+        long scratchSize = sizeInfo.buildScratchSize();
+        blasSize = (blasSize + MIN_BUFFER_PADDING - 1) & ~(MIN_BUFFER_PADDING - 1);
+        scratchSize = (scratchSize + alignment - 1) & ~(alignment - 1);
+
+        var blasResult = createVmaBuffer(vma, vmaAllocator, arena, blasSize,
+                VkBufferUsageFlags.ACCELERATION_STRUCTURE_STORAGE_KHR | VkBufferUsageFlags.SHADER_DEVICE_ADDRESS,
+                0,
+                VkMemoryPropertyFlags.DEVICE_LOCAL);
+        blasBuffer = blasResult.buffer();
+        blasAllocation = blasResult.allocation();
+
+        var blasCreateInfo = VkAccelerationStructureCreateInfoKHR.allocate(arena)
+                .sType(VkStructureType.ACCELERATION_STRUCTURE_CREATE_INFO_KHR)
+                .buffer(blasBuffer)
+                .size(blasSize)
+                .type(VkAccelerationStructureTypeKHR.BOTTOM_LEVEL);
+        var pBlas = VkAccelerationStructureKHR.Ptr.allocate(arena);
+        var result = deviceCommands.createAccelerationStructureKHR(device, blasCreateInfo, null, pBlas);
+        if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create BLAS: " + VkResult.explain(result));
+        blas = Objects.requireNonNull(pBlas.read());
+
+        var scratchResult = createVmaBuffer(vma, vmaAllocator, arena, scratchSize,
+                VkBufferUsageFlags.STORAGE_BUFFER | VkBufferUsageFlags.SHADER_DEVICE_ADDRESS,
+                0,
+                VkMemoryPropertyFlags.DEVICE_LOCAL);
+        var scratchBuffer = scratchResult.buffer();
+        var scratchAllocation = scratchResult.allocation();
+        long scratchAddress = getBufferDeviceAddress(scratchBuffer);
+        long alignedScratchAddress = (scratchAddress + alignment - 1) & ~(alignment - 1);
+
+        buildInfo.scratchData().deviceAddress(alignedScratchAddress);
+        buildInfo.dstAccelerationStructure(blas);
+
+        var bundle = beginSingleTimeCommands();
+
+        var memoryBarrier = VkMemoryBarrier.allocate(arena)
+                .sType(VkStructureType.MEMORY_BARRIER)
+                .srcAccessMask(VkAccessFlags.HOST_WRITE)
+                .dstAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_READ_KHR);
+        deviceCommands.cmdPipelineBarrier(bundle.cmd, VkPipelineStageFlags.HOST, VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR, 0, 1, memoryBarrier, 0, null, 0, null);
+
+        deviceCommands.cmdBuildAccelerationStructuresKHR(bundle.cmd, 1, buildInfo, ppBuildRangeInfo);
+
+        var blasBarrier = VkMemoryBarrier.allocate(arena)
+                .sType(VkStructureType.MEMORY_BARRIER)
+                .srcAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_WRITE_KHR)
+                .dstAccessMask(VkAccessFlags.ACCELERATION_STRUCTURE_READ_KHR);
+        deviceCommands.cmdPipelineBarrier(bundle.cmd, VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR, VkPipelineStageFlags.ACCELERATION_STRUCTURE_BUILD_KHR, 0, 1, blasBarrier, 0, null, 0, null);
+
+        endSingleTimeCommands(bundle);
+
+        vma.destroyBuffer(vmaAllocator, scratchBuffer, scratchAllocation);
+        vma.destroyBuffer(vmaAllocator, localIndexBuffer, localIndexAllocation);
+        vma.destroyBuffer(vmaAllocator, localTransformBuffer, localTransformAllocation);
+
+        var asAddressInfo = VkAccelerationStructureDeviceAddressInfoKHR.allocate(arena)
+                .sType(VkStructureType.ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR)
+                .accelerationStructure(blas);
+        return deviceCommands.getAccelerationStructureDeviceAddressKHR(device, asAddressInfo);
+    }
+
+    private void createAndBuildTlas(Arena arena, long blasAddress, int alignment) {
+        var instanceData = arena.allocate(INSTANCE_STRUCT_SIZE);
+
+        float[] instanceTransform = {
+                1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, 1.0f, 0.0f
+        };
+        for (int i = 0; i < INSTANCE_TRANSFORM_FLOAT_COUNT; i++) {
+            instanceData.set(ValueLayout.JAVA_FLOAT, i * Float.BYTES, instanceTransform[i]);
+        }
+
+        int customIndexAndMask = 0 | (0xFF << INSTANCE_MASK_SHIFT);
+        instanceData.set(ValueLayout.JAVA_INT, INSTANCE_CUSTOM_INDEX_MASK_OFFSET, customIndexAndMask);
+
+        int sbtOffsetAndFlags = 0 | (VkGeometryInstanceFlagsKHR.TRIANGLE_FACING_CULL_DISABLE << INSTANCE_FLAGS_SHIFT);
+        instanceData.set(ValueLayout.JAVA_INT, INSTANCE_SBT_OFFSET_FLAGS_OFFSET, sbtOffsetAndFlags);
+
+        instanceData.set(ValueLayout.JAVA_LONG, INSTANCE_ACCEL_REF_OFFSET, blasAddress);
+
+        // NOTE: Cannot use VMA for TLAS instance buffer — device address must be 16-byte aligned.
+        // VMA does not guarantee alignment for device addresses, so use manual allocation.
+        long instBufSize = alignUp(INSTANCE_STRUCT_SIZE, 16);
+        var instBufInfo = VkBufferCreateInfo.allocate(arena)
+                .size(instBufSize)
+                .usage(VkBufferUsageFlags.SHADER_DEVICE_ADDRESS | VkBufferUsageFlags.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR)
+                .sharingMode(VkSharingMode.EXCLUSIVE);
+        var pInstBuf = VkBuffer.Ptr.allocate(arena);
+        checkResult(deviceCommands.createBuffer(device, instBufInfo, null, pInstBuf), "Failed to create TLAS instance buffer");
+        var localInstBuffer = Objects.requireNonNull(pInstBuf.read());
+
+        var instMemReqs = VkMemoryRequirements.allocate(arena);
+        deviceCommands.getBufferMemoryRequirements(device, localInstBuffer, instMemReqs);
+        var pInstMem = VkDeviceMemory.Ptr.allocate(arena);
+        var instMemAlloc = VkMemoryAllocateInfo.allocate(arena)
+                .allocationSize(instMemReqs.size())
+                .memoryTypeIndex(findMemoryType(instMemReqs.memoryTypeBits(), VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT));
+        var instMemFlags = VkMemoryAllocateFlagsInfo.allocate(arena)
+                .sType(VkStructureType.MEMORY_ALLOCATE_FLAGS_INFO)
+                .flags(VkMemoryAllocateFlags.DEVICE_ADDRESS);
+        instMemAlloc.pNext(instMemFlags.segment());
+        checkResult(deviceCommands.allocateMemory(device, instMemAlloc, null, pInstMem), "Failed to allocate instance buffer memory");
+        var localInstMemory = Objects.requireNonNull(pInstMem.read());
+        deviceCommands.bindBufferMemory(device, localInstBuffer, localInstMemory, 0);
+
+        var ppData = PointerPtr.allocate(arena);
+        deviceCommands.mapMemory(device, localInstMemory, 0, INSTANCE_STRUCT_SIZE, 0, ppData);
+        Objects.requireNonNull(ppData.read()).reinterpret(INSTANCE_STRUCT_SIZE).copyFrom(instanceData);
+        deviceCommands.unmapMemory(device, localInstMemory);
+
+        long instAddress = getBufferDeviceAddress(localInstBuffer);
+
+        var instancesData = VkAccelerationStructureGeometryInstancesDataKHR.allocate(arena)
+                .sType(VkStructureType.ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR);
+        instancesData.data().deviceAddress(instAddress);
+
+        var tlasGeometry = VkAccelerationStructureGeometryKHR.allocate(arena)
+                .sType(VkStructureType.ACCELERATION_STRUCTURE_GEOMETRY_KHR)
+                .geometryType(VkGeometryTypeKHR.INSTANCES)
+                .flags(VkGeometryFlagsKHR.OPAQUE);
+        tlasGeometry.geometry().instances(instancesData);
+
+        var tlasBuildInfo = VkAccelerationStructureBuildGeometryInfoKHR.allocate(arena)
+                .sType(VkStructureType.ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR)
+                .type(VkAccelerationStructureTypeKHR.TOP_LEVEL)
+                .flags(VkBuildAccelerationStructureFlagsKHR.PREFER_FAST_TRACE)
+                .mode(VkBuildAccelerationStructureModeKHR.BUILD)
+                .geometryCount(1)
+                .pGeometries(tlasGeometry);
+
+        var tlasBuildRangeInfo = VkAccelerationStructureBuildRangeInfoKHR.allocate(arena)
+                .primitiveCount(1).primitiveOffset(0).firstVertex(0).transformOffset(0);
+        var ppTlasBuildRangeInfo = PointerPtr.allocate(arena);
+        ppTlasBuildRangeInfo.write(tlasBuildRangeInfo);
+
+        var tlasMaxPrim = IntPtr.allocate(arena, 1);
+        tlasMaxPrim.write(0, 1);
+        var tlasSizeInfo = VkAccelerationStructureBuildSizesInfoKHR.allocate(arena);
+        deviceCommands.getAccelerationStructureBuildSizesKHR(device, VkAccelerationStructureBuildTypeKHR.DEVICE, tlasBuildInfo, tlasMaxPrim, tlasSizeInfo);
+
+        long tlasSize = tlasSizeInfo.accelerationStructureSize();
+        long tlasScratchSize = tlasSizeInfo.buildScratchSize();
+        tlasSize = (tlasSize + MIN_BUFFER_PADDING - 1) & ~(MIN_BUFFER_PADDING - 1);
+        tlasScratchSize = (tlasScratchSize + alignment - 1) & ~(alignment - 1);
+        tlasScratchSize += SBT_REGION_PADDING;
+
+        var tlasResult = createVmaBuffer(vma, vmaAllocator, arena, tlasSize,
+                VkBufferUsageFlags.ACCELERATION_STRUCTURE_STORAGE_KHR | VkBufferUsageFlags.SHADER_DEVICE_ADDRESS,
+                0,
+                VkMemoryPropertyFlags.DEVICE_LOCAL);
+        tlasBuffer = tlasResult.buffer();
+        tlasAllocation = tlasResult.allocation();
+
+        var tlasCreateInfo = VkAccelerationStructureCreateInfoKHR.allocate(arena)
+                .sType(VkStructureType.ACCELERATION_STRUCTURE_CREATE_INFO_KHR)
+                .buffer(tlasBuffer)
+                .size(tlasSize)
+                .type(VkAccelerationStructureTypeKHR.TOP_LEVEL);
+        var pTlas = VkAccelerationStructureKHR.Ptr.allocate(arena);
+        var result = deviceCommands.createAccelerationStructureKHR(device, tlasCreateInfo, null, pTlas);
+        if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create TLAS: " + VkResult.explain(result));
+        tlas = Objects.requireNonNull(pTlas.read());
+
+        var scratchResult = createVmaBuffer(vma, vmaAllocator, arena, tlasScratchSize,
+                VkBufferUsageFlags.STORAGE_BUFFER | VkBufferUsageFlags.SHADER_DEVICE_ADDRESS,
+                0,
+                VkMemoryPropertyFlags.DEVICE_LOCAL);
+        var scratchBuffer = scratchResult.buffer();
+        var scratchAllocation = scratchResult.allocation();
+        long scratchAddressTlas = getBufferDeviceAddress(scratchBuffer);
+        long alignedScratchAddressTlas = (scratchAddressTlas + alignment - 1) & ~(alignment - 1);
+
+        tlasBuildInfo.scratchData().deviceAddress(alignedScratchAddressTlas);
+        tlasBuildInfo.dstAccelerationStructure(tlas);
+
+        var bundle = beginSingleTimeCommands();
+        deviceCommands.cmdBuildAccelerationStructuresKHR(bundle.cmd, 1, tlasBuildInfo, ppTlasBuildRangeInfo);
+        endSingleTimeCommands(bundle);
+
+        vma.destroyBuffer(vmaAllocator, scratchBuffer, scratchAllocation);
+        // Cleanup manual instance buffer allocation
+        deviceCommands.destroyBuffer(device, localInstBuffer, null);
+        deviceCommands.freeMemory(device, localInstMemory, null);
+    }
+
+    private CommandBundle beginSingleTimeCommands() {
+        try (var arena = Arena.ofConfined()) {
+            var indices = findQueueFamilies(physicalDevice);
+            var poolInfo = VkCommandPoolCreateInfo.allocate(arena)
+                    .queueFamilyIndex(indices.graphicsFamily())
+                    .flags(VkCommandPoolCreateFlags.TRANSIENT);
+            var pPool = VkCommandPool.Ptr.allocate(arena);
+            var result = deviceCommands.createCommandPool(device, poolInfo, null, pPool);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create transient command pool: " + VkResult.explain(result));
+            VkCommandPool cmdPool = Objects.requireNonNull(pPool.read());
+
+            var allocInfo = VkCommandBufferAllocateInfo.allocate(arena)
+                    .commandPool(cmdPool)
+                    .level(VkCommandBufferLevel.PRIMARY)
+                    .commandBufferCount(1);
+            var pBuf = VkCommandBuffer.Ptr.allocate(arena);
+            result = deviceCommands.allocateCommandBuffers(device, allocInfo, pBuf);
+            if (result != VkResult.SUCCESS) {
+                deviceCommands.destroyCommandPool(device, cmdPool, null);
+                throw new RuntimeException("Failed to allocate command buffer: " + VkResult.explain(result));
+            }
+            VkCommandBuffer cmd = Objects.requireNonNull(pBuf.read());
+            var beginInfo = VkCommandBufferBeginInfo.allocate(arena).flags(VkCommandBufferUsageFlags.ONE_TIME_SUBMIT);
+            deviceCommands.beginCommandBuffer(cmd, beginInfo);
+            return new CommandBundle(cmd, cmdPool);
+        }
+    }
+
+    private void endSingleTimeCommands(CommandBundle bundle) {
+        try (var arena = Arena.ofConfined()) {
+            deviceCommands.endCommandBuffer(bundle.cmd);
+            var submitInfo = VkSubmitInfo.allocate(arena)
+                    .commandBufferCount(1)
+                    .pCommandBuffers(VkCommandBuffer.Ptr.allocateV(arena, bundle.cmd));
+            var fenceInfo = VkFenceCreateInfo.allocate(arena);
+            var pFence = VkFence.Ptr.allocate(arena);
+            var result = deviceCommands.createFence(device, fenceInfo, null, pFence);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create fence: " + VkResult.explain(result));
+            result = deviceCommands.queueSubmit(graphicsQueue, 1, submitInfo, Objects.requireNonNull(pFence.read()));
+            if (result != VkResult.SUCCESS) {
+                deviceCommands.destroyFence(device, pFence.read(), null);
+                throw new RuntimeException("Failed to submit command buffer: " + VkResult.explain(result));
+            }
+            result = deviceCommands.waitForFences(device, 1, pFence, VkConstants.TRUE, UINT64_MAX);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to wait for fence: " + VkResult.explain(result));
+            deviceCommands.destroyFence(device, pFence.read(), null);
+            deviceCommands.freeCommandBuffers(device, bundle.pool, 1, VkCommandBuffer.Ptr.allocateV(arena, bundle.cmd));
+            deviceCommands.destroyCommandPool(device, bundle.pool, null);
+        }
+    }
+
+    // ======================== Descriptor Set Layout ========================
+    private void createDescriptorSetLayout() {
+        try (var arena = Arena.ofConfined()) {
+            var bindings = VkDescriptorSetLayoutBinding.allocate(arena, 2)
+                    .at(0, b -> b.binding(0).descriptorType(VkDescriptorType.STORAGE_IMAGE).descriptorCount(1).stageFlags(VkShaderStageFlags.RAYGEN_KHR | VkShaderStageFlags.CLOSEST_HIT_KHR))
+                    .at(1, b -> b.binding(1).descriptorType(VkDescriptorType.ACCELERATION_STRUCTURE_KHR).descriptorCount(1).stageFlags(VkShaderStageFlags.RAYGEN_KHR | VkShaderStageFlags.CLOSEST_HIT_KHR));
+            var layoutInfo = VkDescriptorSetLayoutCreateInfo.allocate(arena).bindingCount(2).pBindings(bindings);
+            var pLayout = VkDescriptorSetLayout.Ptr.allocate(arena);
+            var result = deviceCommands.createDescriptorSetLayout(device, layoutInfo, null, pLayout);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create descriptor set layout: " + VkResult.explain(result));
+            descriptorSetLayout = Objects.requireNonNull(pLayout.read());
+        }
+    }
+
+    private void createDescriptorPool() {
+        try (var arena = Arena.ofConfined()) {
+            var sizes = VkDescriptorPoolSize.allocate(arena, 2)
+                    .at(0, s -> s.type(VkDescriptorType.STORAGE_IMAGE).descriptorCount(MAX_FRAMES_IN_FLIGHT * 2))
+                    .at(1, s -> s.type(VkDescriptorType.ACCELERATION_STRUCTURE_KHR).descriptorCount(MAX_FRAMES_IN_FLIGHT * 2));
+            var poolInfo = VkDescriptorPoolCreateInfo.allocate(arena).poolSizeCount(2).pPoolSizes(sizes).maxSets(MAX_FRAMES_IN_FLIGHT * 2);
+            var pPool = VkDescriptorPool.Ptr.allocate(arena);
+            var result = deviceCommands.createDescriptorPool(device, poolInfo, null, pPool);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create descriptor pool: " + VkResult.explain(result));
+            descriptorPool = Objects.requireNonNull(pPool.read());
+        }
+    }
+
+    private void recreateDescriptorPool() {
+        if (descriptorPool != null) {
+            deviceCommands.destroyDescriptorPool(device, descriptorPool, null);
+            descriptorPool = null;
+        }
+        try (var arena = Arena.ofConfined()) {
+            var sizes = VkDescriptorPoolSize.allocate(arena, 2)
+                    .at(0, s -> s.type(VkDescriptorType.STORAGE_IMAGE).descriptorCount(MAX_FRAMES_IN_FLIGHT * 2))
+                    .at(1, s -> s.type(VkDescriptorType.ACCELERATION_STRUCTURE_KHR).descriptorCount(MAX_FRAMES_IN_FLIGHT * 2));
+            var poolInfo = VkDescriptorPoolCreateInfo.allocate(arena).poolSizeCount(2).pPoolSizes(sizes).maxSets(MAX_FRAMES_IN_FLIGHT * 2);
+            var pPool = VkDescriptorPool.Ptr.allocate(arena);
+            var result = deviceCommands.createDescriptorPool(device, poolInfo, null, pPool);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create descriptor pool: " + VkResult.explain(result));
+            descriptorPool = Objects.requireNonNull(pPool.read());
+        }
+    }
+
+    private void createDescriptorSet() {
+        try (var arena = Arena.ofConfined()) {
+            var allocInfo = VkDescriptorSetAllocateInfo.allocate(arena)
+                    .descriptorPool(descriptorPool)
+                    .pSetLayouts(VkDescriptorSetLayout.Ptr.allocateV(arena, descriptorSetLayout))
+                    .descriptorSetCount(1);
+            var pSet = VkDescriptorSet.Ptr.allocate(arena);
+            var result = deviceCommands.allocateDescriptorSets(device, allocInfo, pSet);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to allocate descriptor set: " + VkResult.explain(result));
+            descriptorSet = Objects.requireNonNull(pSet.read());
+        }
+        updateDescriptorSet();
+    }
+
+    private void updateDescriptorSet() {
+        try (var arena = Arena.ofConfined()) {
+            var imageInfo = VkDescriptorImageInfo.allocate(arena).imageView(outputImageView).imageLayout(VkImageLayout.GENERAL);
+            var asInfo = VkWriteDescriptorSetAccelerationStructureKHR.allocate(arena)
+                    .sType(VkStructureType.WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR)
+                    .accelerationStructureCount(1)
+                    .pAccelerationStructures(VkAccelerationStructureKHR.Ptr.allocateV(arena, tlas));
+            var writes = VkWriteDescriptorSet.allocate(arena, 2)
+                    .at(0, w -> w.dstSet(descriptorSet).dstBinding(0).descriptorType(VkDescriptorType.STORAGE_IMAGE).descriptorCount(1).pImageInfo(imageInfo))
+                    .at(1, w -> w.dstSet(descriptorSet).dstBinding(1).descriptorType(VkDescriptorType.ACCELERATION_STRUCTURE_KHR).descriptorCount(1).pNext(asInfo.segment()));
+            deviceCommands.updateDescriptorSets(device, 2, writes, 0, null);
+        }
+    }
+
+    // ======================== Ray Tracing Pipeline ========================
+    private void createRayTracingPipeline() {
+        try (var arena = Arena.ofConfined()) {
+            var rgenCode = compileShader(arena, "/shader/raytracing/ch20/ray.rgen", "rgen");
+            var rchitCode = compileShader(arena, "/shader/raytracing/ch20/ray.rchit", "rchit");
+            var rmissCode = compileShader(arena, "/shader/raytracing/ch20/ray.rmiss", "rmiss");
+            var rgenModule = createShaderModule(rgenCode);
+            var rchitModule = createShaderModule(rchitCode);
+            var rmissModule = createShaderModule(rmissCode);
+
+            var stages = VkPipelineShaderStageCreateInfo.allocate(arena, 3)
+                    .at(0, s -> s.stage(VkShaderStageFlags.RAYGEN_KHR).module(rgenModule).pName(BytePtr.allocateString(arena, "main")))
+                    .at(1, s -> s.stage(VkShaderStageFlags.MISS_KHR).module(rmissModule).pName(BytePtr.allocateString(arena, "main")))
+                    .at(2, s -> s.stage(VkShaderStageFlags.CLOSEST_HIT_KHR).module(rchitModule).pName(BytePtr.allocateString(arena, "main")));
+
+            var groups = VkRayTracingShaderGroupCreateInfoKHR.allocate(arena, 3)
+                    .at(0, g -> g.type(VkRayTracingShaderGroupTypeKHR.GENERAL).generalShader(0).closestHitShader(VkConstants.SHADER_UNUSED_KHR).anyHitShader(VkConstants.SHADER_UNUSED_KHR).intersectionShader(VkConstants.SHADER_UNUSED_KHR))
+                    .at(1, g -> g.type(VkRayTracingShaderGroupTypeKHR.GENERAL).generalShader(1).closestHitShader(VkConstants.SHADER_UNUSED_KHR).anyHitShader(VkConstants.SHADER_UNUSED_KHR).intersectionShader(VkConstants.SHADER_UNUSED_KHR))
+                    .at(2, g -> g.type(VkRayTracingShaderGroupTypeKHR.TRIANGLES_HIT_GROUP).generalShader(VkConstants.SHADER_UNUSED_KHR).closestHitShader(2).anyHitShader(VkConstants.SHADER_UNUSED_KHR).intersectionShader(VkConstants.SHADER_UNUSED_KHR));
+
+            var pushConstantRange = VkPushConstantRange.allocate(arena)
+                    .stageFlags(VkShaderStageFlags.RAYGEN_KHR)
+                    .offset(0)
+                    .size(PUSH_CONSTANT_SIZE_BYTES);
+
+            var layoutInfo = VkPipelineLayoutCreateInfo.allocate(arena)
+                    .setLayoutCount(1)
+                    .pSetLayouts(VkDescriptorSetLayout.Ptr.allocateV(arena, descriptorSetLayout))
+                    .pushConstantRangeCount(1)
+                    .pPushConstantRanges(pushConstantRange);
+            var pLayout = VkPipelineLayout.Ptr.allocate(arena);
+            var result = deviceCommands.createPipelineLayout(device, layoutInfo, null, pLayout);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create pipeline layout: " + VkResult.explain(result));
+            pipelineLayout = Objects.requireNonNull(pLayout.read());
+
+            var pipelineInfo = VkRayTracingPipelineCreateInfoKHR.allocate(arena)
+                    .sType(VkStructureType.RAY_TRACING_PIPELINE_CREATE_INFO_KHR)
+                    .pStages(stages).stageCount(3).pGroups(groups).groupCount(3)
+                    .maxPipelineRayRecursionDepth(1).layout(pipelineLayout)
+                    .flags(VkPipelineCreateFlags.RAY_TRACING_SHADER_GROUP_HANDLE_CAPTURE_REPLAY_KHR);
+            var pPipeline = VkPipeline.Ptr.allocate(arena);
+            result = deviceCommands.createRayTracingPipelinesKHR(device, null, null, 1, pipelineInfo, null, pPipeline);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create ray tracing pipeline: " + VkResult.explain(result));
+            rayTracingPipeline = Objects.requireNonNull(pPipeline.read());
+
+            deviceCommands.destroyShaderModule(device, rgenModule, null);
+            deviceCommands.destroyShaderModule(device, rchitModule, null);
+            deviceCommands.destroyShaderModule(device, rmissModule, null);
+        }
+    }
+
+    // ======================== Shader Compilation ========================
+    /**
+     * Compiles GLSL to SPIR-V at runtime using glslangValidator.
+     * Required -- glslangValidator must be in PATH (Vulkan SDK).
+     *
+     * @param arena  the arena for the returned IntPtr
+     * @param filename resource path (e.g. "/shader/raytracing/ch20/ray.rgen")
+     * @param stage  shader stage: "rgen", "rchit", "rmiss", "vert", "frag", "comp"
+     * @return IntPtr containing SPIR-V words
+     */
+    private IntPtr compileShader(Arena arena, String filename, String stage) {
+        String path = filename.startsWith("/") ? filename : "/" + filename;
+        try (var stream = Application.class.getResourceAsStream(path)) {
+            if (stream == null) throw new RuntimeException("Shader not found: " + filename);
+            String source = new String(stream.readAllBytes());
+
+            java.nio.file.Path tempSpv = java.nio.file.Files.createTempFile("vulkan_shader_", ".spv");
+
+            try {
+                Process process = new ProcessBuilder(
+                        "glslangValidator",
+                        "--target-env", "vulkan1.2",
+                        "--stdin", "-S", stage, "-V", "-o", tempSpv.toString()
+                ).start();
+
+                try (var out = process.getOutputStream()) {
+                    out.write(source.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+
+                int exitCode = process.waitFor();
+                if (exitCode != 0) {
+                    String errMsg = new String(process.getErrorStream().readAllBytes());
+                    throw new RuntimeException("Glslang failed (" + filename + "):\n" + errMsg);
+                }
+
+                byte[] spirvBytes = java.nio.file.Files.readAllBytes(tempSpv);
+
+                int wordCount = spirvBytes.length / Integer.BYTES;
+                int[] words = new int[wordCount];
+                java.nio.ByteBuffer.wrap(spirvBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(words);
+                IntPtr ret = IntPtr.allocate(arena, wordCount);
+                ret.segment().copyFrom(MemorySegment.ofArray(words));
+                return ret;
+            } finally {
+                java.nio.file.Files.deleteIfExists(tempSpv);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Shader compilation interrupted", e);
+        } catch (Exception e) {
+            throw new RuntimeException("Shader compilation error", e);
+        }
+    }
+
+    private VkShaderModule createShaderModule(IntPtr code) {
+        try (var arena = Arena.ofConfined()) {
+            var info = VkShaderModuleCreateInfo.allocate(arena).codeSize(code.size() * Integer.BYTES).pCode(code);
+            var pModule = VkShaderModule.Ptr.allocate(arena);
+            var result = deviceCommands.createShaderModule(device, info, null, pModule);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to create shader module: " + VkResult.explain(result));
+            return Objects.requireNonNull(pModule.read());
+        }
+    }
+
+    // ======================== Shader Binding Table ========================
+    private void createShaderBindingTable() {
+        try (var arena = Arena.ofConfined()) {
+            int groupCount = 3;
+            sbtRecordSize = handleSize;
+            int handleSizeAligned = ((handleSize + handleAlignment - 1) / handleAlignment) * handleAlignment;
+
+            var handles = BytePtr.allocate(arena, groupCount * handleSizeAligned);
+            var getResult = deviceCommands.getRayTracingShaderGroupHandlesKHR(device, rayTracingPipeline, 0, groupCount, groupCount * handleSizeAligned, handles.segment());
+            if (getResult != VkResult.SUCCESS) throw new RuntimeException("Failed to get shader group handles: " + VkResult.explain(getResult));
+
+            int totalSize = 3 * shaderGroupBaseAlignment + handleSize;
+
+            var sbtResult = createVmaBuffer(vma, vmaAllocator, arena, totalSize,
+                    VkBufferUsageFlags.SHADER_BINDING_TABLE_KHR | VkBufferUsageFlags.SHADER_DEVICE_ADDRESS,
+                    VmaAllocationCreateFlags.HOST_ACCESS_SEQUENTIAL_WRITE,
+                    VkMemoryPropertyFlags.HOST_VISIBLE | VkMemoryPropertyFlags.HOST_COHERENT);
+            sbtBuffer = sbtResult.buffer();
+            sbtAllocation = sbtResult.allocation();
+
+            var pMap = PointerPtr.allocate(arena);
+            vma.mapMemory(vmaAllocator, sbtAllocation, pMap);
+            var sbtSeg = Objects.requireNonNull(pMap.read()).reinterpret(totalSize);
+
+            var bufAddr = deviceCommands.getBufferDeviceAddress(device, VkBufferDeviceAddressInfo.allocate(arena).buffer(sbtBuffer));
+            raygenAddress = (bufAddr + shaderGroupBaseAlignment - 1) & ~(long)(shaderGroupBaseAlignment - 1);
+            long offset = raygenAddress - bufAddr;
+
+            missAddress = raygenAddress + shaderGroupBaseAlignment;
+            hitAddress = missAddress + shaderGroupBaseAlignment;
+
+            for (int i = 0; i < groupCount; i++) {
+                long srcOffset = i * handleSizeAligned;
+                long dstOffset = offset + i * shaderGroupBaseAlignment;
+                sbtSeg.asSlice(dstOffset, handleSize).copyFrom(handles.segment().asSlice(srcOffset, handleSize));
+            }
+            vma.unmapMemory(vmaAllocator, sbtAllocation);
+        }
+    }
+
+    // ======================== Command Buffers ========================
+    private void createCommandBuffers() {
+        commandBuffers = new VkCommandBuffer[MAX_FRAMES_IN_FLIGHT];
+        try (var arena = Arena.ofConfined()) {
+            var allocInfo = VkCommandBufferAllocateInfo.allocate(arena)
+                    .commandPool(commandPool).level(VkCommandBufferLevel.PRIMARY).commandBufferCount(MAX_FRAMES_IN_FLIGHT);
+            var pCmds = VkCommandBuffer.Ptr.allocate(arena, MAX_FRAMES_IN_FLIGHT);
+            checkResult(deviceCommands.allocateCommandBuffers(device, allocInfo, pCmds), "Failed to allocate command buffers");
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                commandBuffers[i] = Objects.requireNonNull(pCmds.read(i));
+            }
+        }
+    }
+
+    // ======================== Draw Frame ========================
+    private void drawFrame() {
+        try (var arena = Arena.ofConfined()) {
+            if (swapChainExtent.width() == 0 || swapChainExtent.height() == 0) {
+                needsSwapchainRecreation = true;
+                return;
+            }
+
+            deviceCommands.waitForFences(device, 1, VkFence.Ptr.allocateV(arena, inFlightFences[currentFrame]), VkConstants.TRUE, UINT64_MAX);
+
+            var pImageIndex = IntPtr.allocate(arena);
+            var result = deviceCommands.acquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], null, pImageIndex);
+            if (result == VkResult.ERROR_SURFACE_LOST_KHR || result == VkResult.ERROR_OUT_OF_DATE_KHR || result == VkResult.ERROR_INITIALIZATION_FAILED) {
+                needsSwapchainRecreation = true;
+                return;
+            } else if (result != VkResult.SUCCESS && result != VkResult.SUBOPTIMAL_KHR) {
+                throw new RuntimeException("Failed to acquire swap chain image: " + VkResult.explain(result));
+            }
+            int imageIndex = pImageIndex.read();
+
+            deviceCommands.resetFences(device, 1, VkFence.Ptr.allocateV(arena, inFlightFences[currentFrame]));
+
+            var beginInfo = VkCommandBufferBeginInfo.allocate(arena);
+            deviceCommands.beginCommandBuffer(commandBuffers[currentFrame], beginInfo);
+            recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+            deviceCommands.endCommandBuffer(commandBuffers[currentFrame]);
+
+            var submitInfo = VkSubmitInfo.allocate(arena)
+                    .waitSemaphoreCount(1)
+                    .pWaitSemaphores(VkSemaphore.Ptr.allocateV(arena, imageAvailableSemaphores[currentFrame]))
+                    .pWaitDstStageMask(IntPtr.allocateV(arena, VkPipelineStageFlags.BOTTOM_OF_PIPE))
+                    .commandBufferCount(1)
+                    .pCommandBuffers(VkCommandBuffer.Ptr.allocateV(arena, commandBuffers[currentFrame]))
+                    .signalSemaphoreCount(1)
+                    .pSignalSemaphores(VkSemaphore.Ptr.allocateV(arena, renderFinishedSemaphores[currentFrame]));
+            result = deviceCommands.queueSubmit(graphicsQueue, 1, submitInfo, inFlightFences[currentFrame]);
+            if (result != VkResult.SUCCESS) throw new RuntimeException("Failed to submit draw command buffer: " + VkResult.explain(result));
+
+            var presentInfo = VkPresentInfoKHR.allocate(arena)
+                    .waitSemaphoreCount(1)
+                    .pWaitSemaphores(VkSemaphore.Ptr.allocateV(arena, renderFinishedSemaphores[currentFrame]))
+                    .swapchainCount(1)
+                    .pSwapchains(VkSwapchainKHR.Ptr.allocateV(arena, swapChain))
+                    .pImageIndices(IntPtr.allocateV(arena, imageIndex));
+            result = deviceCommands.queuePresentKHR(presentQueue, presentInfo);
+            if (result == VkResult.ERROR_OUT_OF_DATE_KHR || result == VkResult.SUBOPTIMAL_KHR || framebufferResized || needsSwapchainRecreation) {
+                framebufferResized = false;
+                needsSwapchainRecreation = true;
+            } else if (result != VkResult.SUCCESS) {
+                throw new RuntimeException("Failed to present swap chain image: " + VkResult.explain(result));
+            }
+
+            currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+        }
+    }
+
+    private void handleMinimizedWindow() {
+        try (var arena = Arena.ofConfined()) {
+            IntPtr w = IntPtr.allocate(arena), h = IntPtr.allocate(arena);
+            glfw.getFramebufferSize(window, w, h);
+            int width = w.read();
+            int height = h.read();
+            if (width > 0 && height > 0) needsSwapchainRecreation = true;
+        }
+    }
+
+    private void recordCommandBuffer(VkCommandBuffer cmd, int imageIndex) {
+        try (var arena = Arena.ofConfined()) {
+            var raygenRegion = VkStridedDeviceAddressRegionKHR.allocate(arena)
+                    .deviceAddress(raygenAddress).stride(sbtRecordSize).size(sbtRecordSize);
+            var missRegion = VkStridedDeviceAddressRegionKHR.allocate(arena)
+                    .deviceAddress(missAddress).stride(sbtRecordSize).size(sbtRecordSize);
+            var hitRegion = VkStridedDeviceAddressRegionKHR.allocate(arena)
+                    .deviceAddress(hitAddress).stride(sbtRecordSize).size(sbtRecordSize);
+            var callableRegion = VkStridedDeviceAddressRegionKHR.allocate(arena)
+                    .deviceAddress(0).stride(0).size(0);
+
+            // Barrier 1: outputImage GENERAL -> GENERAL
+            var rayTraceBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.GENERAL)
+                    .newLayout(VkImageLayout.GENERAL)
+                    .srcAccessMask(VkAccessFlags.SHADER_WRITE)
+                    .dstAccessMask(VkAccessFlags.SHADER_WRITE)
+                    .image(outputImage)
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            deviceCommands.cmdPipelineBarrier(cmd,
+                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,
+                    VkPipelineStageFlags.RAY_TRACING_SHADER_KHR,
+                    0, 0, null, 0, null, 1, rayTraceBarrier);
+
+            deviceCommands.cmdBindPipeline(cmd, VkPipelineBindPoint.RAY_TRACING_KHR, rayTracingPipeline);
+            var pDescriptorSet = VkDescriptorSet.Ptr.allocate(arena);
+            pDescriptorSet.write(descriptorSet);
+            deviceCommands.cmdBindDescriptorSets(cmd, VkPipelineBindPoint.RAY_TRACING_KHR, pipelineLayout, 0, 1, pDescriptorSet, 0, null);
+
+            float aspectRatio = (float) swapChainExtent.width() / (float) swapChainExtent.height();
+            float fovRadians = (float) Math.toRadians(CAMERA_FOV);
+            Matrix4f projection = new Matrix4f().setPerspective(fovRadians, aspectRatio, CAMERA_NEAR, CAMERA_FAR, true);
+            Matrix4f view = new Matrix4f();
+            view.lookAt(new Vector3f(0.0f, 0.0f, CAMERA_POSITION_Z), new Vector3f(0.0f, 0.0f, 0.0f), new Vector3f(0.0f, 1.0f, 0.0f));
+
+            Matrix4f invProjection = new Matrix4f(projection).invert();
+            Matrix4f invView = new Matrix4f(view).invert();
+
+            float[] pushConstants = new float[PUSH_CONSTANT_FLOAT_COUNT];
+            invProjection.get(pushConstants, 0);
+            invView.get(pushConstants, MATRIX4F_FLOAT_COUNT);
+
+            var nativeMemory = arena.allocate(ValueLayout.JAVA_FLOAT, PUSH_CONSTANT_FLOAT_COUNT);
+            for (int i = 0; i < PUSH_CONSTANT_FLOAT_COUNT; i++) {
+                nativeMemory.set(ValueLayout.JAVA_FLOAT, i * Float.BYTES, pushConstants[i]);
+            }
+            deviceCommands.cmdPushConstants(cmd, pipelineLayout, VkShaderStageFlags.RAYGEN_KHR, 0, PUSH_CONSTANT_SIZE_BYTES, nativeMemory);
+
+            deviceCommands.cmdTraceRaysKHR(cmd, raygenRegion, missRegion, hitRegion, callableRegion,
+                    swapChainExtent.width(), swapChainExtent.height(), 1);
+
+            // Barrier 2: outputImage GENERAL -> TRANSFER_SRC
+            var transferBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.GENERAL)
+                    .newLayout(VkImageLayout.TRANSFER_SRC_OPTIMAL)
+                    .srcAccessMask(VkAccessFlags.SHADER_WRITE)
+                    .dstAccessMask(VkAccessFlags.TRANSFER_READ)
+                    .image(outputImage)
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.RAY_TRACING_SHADER_KHR, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, transferBarrier);
+
+            // Barrier 3: swapchain UNDEFINED -> TRANSFER_DST
+            var swapchainBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.UNDEFINED)
+                    .newLayout(VkImageLayout.TRANSFER_DST_OPTIMAL)
+                    .srcAccessMask(0)
+                    .dstAccessMask(VkAccessFlags.TRANSFER_WRITE)
+                    .image(swapChainImages.read(imageIndex))
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TOP_OF_PIPE, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, swapchainBarrier);
+
+            var copy = VkImageCopy.allocate(arena)
+                    .srcSubresource(s -> s.aspectMask(VkImageAspectFlags.COLOR).layerCount(1))
+                    .dstSubresource(s -> s.aspectMask(VkImageAspectFlags.COLOR).layerCount(1))
+                    .extent(e -> e.width(swapChainExtent.width()).height(swapChainExtent.height()).depth(1));
+            deviceCommands.cmdCopyImage(cmd, outputImage, VkImageLayout.TRANSFER_SRC_OPTIMAL,
+                    swapChainImages.read(imageIndex), VkImageLayout.TRANSFER_DST_OPTIMAL, 1, copy);
+
+            // Barrier 4: swapchain TRANSFER_DST -> PRESENT_SRC
+            var presentBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.TRANSFER_DST_OPTIMAL)
+                    .newLayout(VkImageLayout.PRESENT_SRC_KHR)
+                    .srcAccessMask(VkAccessFlags.TRANSFER_WRITE)
+                    .dstAccessMask(0)
+                    .image(swapChainImages.read(imageIndex))
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TRANSFER, VkPipelineStageFlags.BOTTOM_OF_PIPE, 0, 0, null, 0, null, 1, presentBarrier);
+
+            // Barrier 5: outputImage TRANSFER_SRC -> GENERAL
+            var outputBarrier = VkImageMemoryBarrier.allocate(arena)
+                    .sType(VkStructureType.IMAGE_MEMORY_BARRIER)
+                    .oldLayout(VkImageLayout.TRANSFER_SRC_OPTIMAL)
+                    .newLayout(VkImageLayout.GENERAL)
+                    .srcAccessMask(VkAccessFlags.TRANSFER_READ)
+                    .dstAccessMask(VkAccessFlags.SHADER_WRITE)
+                    .image(outputImage)
+                    .subresourceRange(r -> r.aspectMask(VkImageAspectFlags.COLOR).levelCount(1).layerCount(1));
+            deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TRANSFER, VkPipelineStageFlags.RAY_TRACING_SHADER_KHR, 0, 0, null, 0, null, 1, outputBarrier);
+        }
+    }
+
+    // ======================== Helpers ========================
+    private int findMemoryType(int typeBits, int properties) {
+        try (var arena = Arena.ofConfined()) {
+            var memProps = VkPhysicalDeviceMemoryProperties.allocate(arena);
+            instanceCommands.getPhysicalDeviceMemoryProperties(physicalDevice, memProps);
+            for (int i = 0; i < memProps.memoryTypeCount(); i++) {
+                if ((typeBits & (1 << i)) != 0 &&
+                    (memProps.memoryTypes().at(i).propertyFlags() & properties) == properties) {
+                    return i;
+                }
+            }
+            throw new RuntimeException("Failed to find suitable memory type");
+        }
+    }
+
+    public static void main(String[] args) {
+        try {
+            var app = new Application();
+            app.run();
+        } catch (Throwable e) {
+            e.printStackTrace(System.err);
+        }
+    }
+}
