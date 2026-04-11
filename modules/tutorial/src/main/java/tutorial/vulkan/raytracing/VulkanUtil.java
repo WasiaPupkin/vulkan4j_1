@@ -196,6 +196,22 @@ public final class VulkanUtil {
         deviceCmds.unmapMemory(device, memory);
     }
 
+    /**
+     * Uploads byte array to mapped VkDeviceMemory.
+     */
+    public static void uploadBufferData(
+            VkDeviceCommands deviceCmds, VkDevice device, Arena arena,
+            VkDeviceMemory memory, long offset, long size, byte[] data
+    ) {
+        var pData = PointerPtr.allocate(arena);
+        deviceCmds.mapMemory(device, memory, offset, size, 0, pData);
+        var seg = pData.read().reinterpret(size);
+        for (int i = 0; i < data.length; i++) {
+            seg.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, data[i]);
+        }
+        deviceCmds.unmapMemory(device, memory);
+    }
+
     // ======================== Image Barrier ========================
 
     /**
