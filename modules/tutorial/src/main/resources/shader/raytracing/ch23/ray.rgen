@@ -1,0 +1,59 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+struct RayPayload {
+    vec3 color;
+    vec3 barycentrics;
+};
+
+layout(location = 0) rayPayloadEXT RayPayload payload;
+layout(binding = 0, set = 0, rgba8) uniform image2D resultImage;
+layout(binding = 1, set = 0) uniform accelerationStructureEXT tlas;
+
+layout(push_constant) uniform Constants {
+    mat4 model;
+    mat4 inverseProjection;
+    mat4 inverseView;
+} constants;
+
+void main() {
+    // Normalize pixel coordinates to [-1, 1]
+    vec2 pixelCoord = (vec2(gl_LaunchIDEXT.xy) / vec2(gl_LaunchSizeEXT.xy)) * 2.0 - 1.0;
+    pixelCoord.y = -pixelCoord.y; // Flip Y for Vulkan NDC
+
+    // Ray direction in view space (looking down -Z in Vulkan NDC)
+    float fovScale = tan(radians(45.0 * 0.5));
+    vec3 rayDirView = normalize(vec3(pixelCoord * fovScale, -1.0));
+
+    // Extract camera position from inverse view matrix (4th column)
+    vec3 rayOrigin = constants.inverseView[3].xyz;
+
+    // Transform ray direction to world space
+    vec3 rayDirection = normalize((constants.inverseView * vec4(rayDirView, 0.0)).xyz);
+
+    // Transform ray into model (object) space
+    // The geometry in BLAS is in its local space (not rotated)
+    // We inverse-transform the ray so it hits the geometry as if it were rotated
+    mat4 modelInv = transpose(constants.model); // For rotation matrix, inverse == transpose
+    rayOrigin = (modelInv * vec4(rayOrigin, 1.0)).xyz;
+    rayDirection = normalize((modelInv * vec4(rayDirection, 0.0)).xyz);
+
+    payload.color = vec3(0.0, 0.0, 0.0); // Default background
+    payload.barycentrics = vec3(0.0);
+
+    traceRayEXT(
+        tlas,
+        gl_RayFlagsOpaqueEXT,
+        0xFF,
+        0,
+        0,
+        0,
+        rayOrigin,
+        0.0,
+        rayDirection,
+        1000.0,
+        0
+    );
+
+    imageStore(resultImage, ivec2(gl_LaunchIDEXT.xy), vec4(payload.color, 1.0));
+}
