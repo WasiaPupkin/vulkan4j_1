@@ -16,15 +16,12 @@
 | **Descriptor Set** | 2 bindings (STORAGE_IMAGE + ACCELERATION_STRUCTURE) | 3 bindings (+ COMBINED_IMAGE_SAMPLER) |
 | **Closest Hit шейдер** | Интерполяция цветов по барицентрике | Сэмплирование текстуры по интерполированным UV |
 | **Device Features** | Базовые | + `samplerAnisotropy` |
-
-### Что осталось прежним
-
-- **Геометрия**: Тот же квад (4 вершины, 2 треугольника, 6 индексов)
-- **Вращение**: 90°/с вокруг оси Z
-- **Камера**: Позиция (2,2,2), FOV 45°, смотрит в (0,0,0)
-- **BLAS/TLAS**: Та же структура acceleration structures
-- **Push Constants**: model + invProj + invView (48 floats)
-- **Ray Generation и Miss шейдеры**: Практически идентичны
+| **Камера** | Позиция (2,2,2), Z-up | Позиция (0,0,3), Y-up — фронтальный вид |
+| **Ось вращения** | Ось Z (квад крутится в своей плоскости) | Ось X (квад наклоняется, видно 3D) |
+| **Aspect ratio** | Зависит от swapchain → искажается | Фиксированный 16:9, letterbox при ресайзе |
+| **Output image** | Размер = swapchain extent | Фиксированный WIDTH×HEIGHT |
+| **Image copy** | `cmdCopyImage` (пиксельный copy) | `cmdBlitImage` с letterbox |
+| **Gamma correction** | Нет | `pow(color, 1/2.2)` в rchit |
 
 ---
 
@@ -215,13 +212,68 @@ if (gl_PrimitiveID == 0) {
     texCoord = bary.x * uv2 + bary.y * uv3 + bary.z * uv0;
 }
 
-// Сэмплируем текстуру
-payload.color = texture(texSampler, texCoord).rgb;
+// Сэмплируем текстуру и корректируем яркость
+vec3 sampledColor = texture(texSampler, texCoord).rgb;
+payload.color = pow(sampledColor, vec3(1.0 / 2.2));
 ```
 
 **Ключевое отличие от ch23**: Вместо интерполяции цветов вершин (`bary.x*color0 + bary.y*color1 + bary.z*color2`), мы интерполируем UV координаты и сэмплируем текстуру.
 
-**Почему интерполяция UV работает?** Барицентрические координаты — это веса для вершин треугольника. Они одинаково хорошо работают для интерполяции любых атрибутов: цветов, UV, нормалей и т.д.
+**Gamma correction**: `pow(color, 1.0/2.2)` компенсирует разницу между SRGB текстурой и UNORM output image. Без этого картинка была бы слишком тёмной.
+
+### 11. Фиксированный Output Image и Letterbox
+
+**Проблема**: В предыдущих главах output image создавался с размерами swapchain. При ресайзе окна (например, сжатии по высоте) картинка сплющивалась, так как aspect ratio нарушался.
+
+**Решение**:
+1. **Output image** всегда фиксированного размера `WIDTH × HEIGHT` (1280×720)
+2. **Ray tracing** рендерит в эти фиксированные размеры (`cmdTraceRaysKHR(WIDTH, HEIGHT, 1)`)
+3. При копировании на swapchain используется **`cmdBlitImage`** с расчётом letterbox:
+
+```java
+// Letterbox: сохраняем aspect ratio при копировании
+int outWidth = Math.max(1, swapChainExtent.width());
+int outHeight = Math.max(1, swapChainExtent.height());
+float targetAspect = ASPECT_RATIO;  // 1280/720 = 16:9
+float windowAspect = (float) outWidth / outHeight;
+
+if (windowAspect > targetAspect) {
+    // Окно шире — letterbox по горизонтали (чёрные полосы слева/справа)
+    int scaledWidth = (int) (outHeight * targetAspect);
+    int offsetX = (outWidth - scaledWidth) / 2;
+    dstX0 = offsetX; dstY0 = 0; dstX1 = offsetX + scaledWidth; dstY1 = outHeight;
+} else {
+    // Окно уже — letterbox по вертикали (чёрные полосы сверху/снизу)
+    int scaledHeight = (int) (outWidth / targetAspect);
+    int offsetY = (outHeight - scaledHeight) / 2;
+    dstX0 = 0; dstY0 = offsetY; dstX1 = outWidth; dstY1 = offsetY + scaledHeight;
+}
+```
+
+**Почему `cmdBlitImage` а не `cmdCopyImage`?** `cmdCopyImage` делает побайтовое копирование без масштабирования. `cmdBlitImage` поддерживает масштабирование с фильтрацией (`VkFilter.LINEAR`), что нужно для letterbox.
+
+**Важно**: `createOutputImage()` вызывается только один раз при инициализации. При `recreateSwapChain()` output image **НЕ пересоздаётся** — он остаётся фиксированным.
+
+### 12. Исправление VMA Cleanup
+
+В предыдущих главах `cleanupVulkanHandles()` просто занулял ссылку на VMA аллокатор:
+```java
+// БЫЛО (в ch20-ch23):
+vmaAllocator = null;  // ← Утечка VkDeviceMemory!
+```
+
+Это приводило к 3 ошибкам валидации: `VkDeviceMemory has not been destroyed`.
+
+**Исправление**:
+```java
+// СТАЛО (в ch26):
+if (vmaAllocator != null) {
+    vma.destroyAllocator(vmaAllocator);
+    vmaAllocator = null;
+}
+```
+
+Вызов `vmaDestroyAllocator()` **перед** `vkDestroyDevice()` корректно освобождает все VMA пулы и устраняет все 3 ошибки валидации.
 
 ---
 
@@ -243,6 +295,10 @@ payload.color = texture(texSampler, texCoord).rgb;
 
 Всё остальное (цвета, UV, нормали) нужно **интерполировать вручную** по барицентрическим координатам.
 
+### Почему нет автоматической гамма-коррекции?
+
+В графическом пайплайне swapchain формат SRGB автоматически делает gamma correction при записи пикселей. В ray tracing output image — UNORM, поэтому gamma correction нужно делать вручную в шейдере.
+
 ---
 
 ## Структура Файлов
@@ -250,11 +306,11 @@ payload.color = texture(texSampler, texCoord).rgb;
 ```
 shader/raytracing/ch26/
 ├── ray.rgen      # Ray generation: dispatch rays, write to output image
-├── ray.rchit     # Closest hit: interpolate UV, sample texture
+├── ray.rchit     # Closest hit: interpolate UV, sample texture, gamma correction
 └── ray.rmiss     # Miss: black background
 
 resources/texture/
-└── texture.png   # Текстура (шахматный паттерн или изображение)
+└── texture.png   # Текстура (512×512, SRGB)
 ```
 
 ---
@@ -266,7 +322,7 @@ cd modules
 mvn exec:java -pl tutorial -Dexec.mainClass="tutorial.vulkan.raytracing.ch26.Application" -Dexec.cleanupDaemonThreads=false
 ```
 
-**Ожидается**: Вращающийся квадрат с текстурой, идентичный `part08/ch26/Main.java`, но с ray tracing рендерингом.
+**Ожидается**: Вращающийся квадрат с текстурой, идентичный `part08/ch26/Main.java`, но с ray tracing рендерингом. При ресайзе окна — aspect ratio сохраняется, чёрные полосы по краям.
 
 ---
 
@@ -276,9 +332,12 @@ mvn exec:java -pl tutorial -Dexec.mainClass="tutorial.vulkan.raytracing.ch26.App
 2. **COMBINED_IMAGE_SAMPLER** — стандартный способ привязки текстур в Vulkan
 3. **SRGB формат** важен для корректной цветопередачи текстур
 4. **Image layout transitions** критичны — UNDEFINED → TRANSFER_DST → SHADER_READ_ONLY
-5. **Анизотропия** улучшает качество текстуры под углом (хотя для квада это не заметно)
+5. **Анизотропия** улучшает качество текстуры под углом
 6. **BLAS** не знает о UV — он строится только по позициям вершин
 7. **Stride** вершин влияет на то, как BLAS читает позиции из vertex buffer
+8. **Фиксированный output image** + **letterbox** = корректный aspect ratio при ресайзе
+9. **cmdBlitImage** поддерживает масштабирование, cmdCopyImage — нет
+10. **vmaDestroyAllocator()** должен вызываться перед vkDestroyDevice для корректного cleanup
 
 ---
 
@@ -288,3 +347,4 @@ mvn exec:java -pl tutorial -Dexec.mainClass="tutorial.vulkan.raytracing.ch26.App
 - **Mipmaps**: Создать mip levels для текстуры
 - **Несколько объектов**: Добавить больше квадов/моделей с разными текстурами
 - **PBR**: Physically-Based Rendering с текстурами roughness/metallic
+- **Теневые лучи**: Secondary rays для мягких теней

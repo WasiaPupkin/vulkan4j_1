@@ -57,6 +57,7 @@ import club.doki7.vulkan.datatype.VkAccelerationStructureGeometryTrianglesDataKH
 import club.doki7.vulkan.datatype.VkApplicationInfo;
 import club.doki7.vulkan.datatype.VkBufferCreateInfo;
 import club.doki7.vulkan.datatype.VkBufferDeviceAddressInfo;
+import club.doki7.vulkan.datatype.VkBufferImageCopy;
 import club.doki7.vulkan.datatype.VkCommandBufferAllocateInfo;
 import club.doki7.vulkan.datatype.VkCommandBufferBeginInfo;
 import club.doki7.vulkan.datatype.VkCommandPoolCreateInfo;
@@ -73,7 +74,7 @@ import club.doki7.vulkan.datatype.VkExtensionProperties;
 import club.doki7.vulkan.datatype.VkExtent2D;
 import club.doki7.vulkan.datatype.VkExtent3D;
 import club.doki7.vulkan.datatype.VkFenceCreateInfo;
-import club.doki7.vulkan.datatype.VkImageCopy;
+import club.doki7.vulkan.datatype.VkImageBlit;
 import club.doki7.vulkan.datatype.VkImageCreateInfo;
 import club.doki7.vulkan.datatype.VkImageViewCreateInfo;
 import club.doki7.vulkan.datatype.VkInstanceCreateInfo;
@@ -99,6 +100,7 @@ import club.doki7.vulkan.datatype.VkPushConstantRange;
 import club.doki7.vulkan.datatype.VkQueueFamilyProperties;
 import club.doki7.vulkan.datatype.VkRayTracingPipelineCreateInfoKHR;
 import club.doki7.vulkan.datatype.VkRayTracingShaderGroupCreateInfoKHR;
+import club.doki7.vulkan.datatype.VkSamplerCreateInfo;
 import club.doki7.vulkan.datatype.VkSemaphoreCreateInfo;
 import club.doki7.vulkan.datatype.VkShaderModuleCreateInfo;
 import club.doki7.vulkan.datatype.VkStridedDeviceAddressRegionKHR;
@@ -108,19 +110,15 @@ import club.doki7.vulkan.datatype.VkSurfaceFormatKHR;
 import club.doki7.vulkan.datatype.VkSwapchainCreateInfoKHR;
 import club.doki7.vulkan.datatype.VkWriteDescriptorSet;
 import club.doki7.vulkan.datatype.VkWriteDescriptorSetAccelerationStructureKHR;
-import club.doki7.vulkan.datatype.VkBufferImageCopy;
-import club.doki7.vulkan.datatype.VkSamplerCreateInfo;
 import club.doki7.vulkan.enumtype.VkAccelerationStructureBuildTypeKHR;
 import club.doki7.vulkan.enumtype.VkAccelerationStructureTypeKHR;
+import club.doki7.vulkan.enumtype.VkBorderColor;
 import club.doki7.vulkan.enumtype.VkBuildAccelerationStructureModeKHR;
 import club.doki7.vulkan.enumtype.VkColorSpaceKHR;
 import club.doki7.vulkan.enumtype.VkCommandBufferLevel;
+import club.doki7.vulkan.enumtype.VkCompareOp;
 import club.doki7.vulkan.enumtype.VkDescriptorType;
 import club.doki7.vulkan.enumtype.VkFilter;
-import club.doki7.vulkan.enumtype.VkBorderColor;
-import club.doki7.vulkan.enumtype.VkCompareOp;
-import club.doki7.vulkan.enumtype.VkSamplerMipmapMode;
-import club.doki7.vulkan.enumtype.VkSamplerAddressMode;
 import club.doki7.vulkan.enumtype.VkFormat;
 import club.doki7.vulkan.enumtype.VkGeometryTypeKHR;
 import club.doki7.vulkan.enumtype.VkImageLayout;
@@ -132,6 +130,8 @@ import club.doki7.vulkan.enumtype.VkPipelineBindPoint;
 import club.doki7.vulkan.enumtype.VkPresentModeKHR;
 import club.doki7.vulkan.enumtype.VkRayTracingShaderGroupTypeKHR;
 import club.doki7.vulkan.enumtype.VkResult;
+import club.doki7.vulkan.enumtype.VkSamplerAddressMode;
+import club.doki7.vulkan.enumtype.VkSamplerMipmapMode;
 import club.doki7.vulkan.enumtype.VkSharingMode;
 import club.doki7.vulkan.enumtype.VkStructureType;
 import club.doki7.vulkan.handle.VkAccelerationStructureKHR;
@@ -152,16 +152,16 @@ import club.doki7.vulkan.handle.VkPhysicalDevice;
 import club.doki7.vulkan.handle.VkPipeline;
 import club.doki7.vulkan.handle.VkPipelineLayout;
 import club.doki7.vulkan.handle.VkQueue;
+import club.doki7.vulkan.handle.VkSampler;
 import club.doki7.vulkan.handle.VkSemaphore;
 import club.doki7.vulkan.handle.VkShaderModule;
 import club.doki7.vulkan.handle.VkSurfaceKHR;
 import club.doki7.vulkan.handle.VkSwapchainKHR;
-import club.doki7.vulkan.handle.VkSampler;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 import javax.imageio.ImageIO;
-import java.awt.Color;
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.lang.foreign.Arena;
@@ -190,6 +190,7 @@ public class Application {
     // ======================== Window Configuration ========================
     private static final int WIDTH = 1280;
     private static final int HEIGHT = 720;
+    private static final float ASPECT_RATIO = (float) WIDTH / HEIGHT;
     private static final BytePtr WINDOW_TITLE = BytePtr.allocateString(Arena.global(), "Chapter 26 - Ray Traced Textured Rotating Quad");
 
     // ======================== Validation Layers ========================
@@ -1000,15 +1001,6 @@ public class Application {
             }
             swapChainImageViews = null;
         }
-        if (outputImageView != null) {
-            deviceCommands.destroyImageView(device, outputImageView, null);
-            outputImageView = null;
-        }
-        if (outputImage != null) {
-            vma.destroyImage(vmaAllocator, outputImage, outputImageAllocation);
-            outputImage = null;
-            outputImageAllocation = null;
-        }
         if (swapChain != null) {
             deviceCommands.destroySwapchainKHR(device, swapChain, null);
             swapChain = null;
@@ -1033,8 +1025,6 @@ public class Application {
         try {
             createSwapchain();
             createImageViews();
-            createOutputImage();
-            transitionOutputImageToGeneral();
             recreateDescriptorPool();
             createDescriptorSet();
         } catch (RuntimeException e) {
@@ -1045,13 +1035,12 @@ public class Application {
 
     // ======================== Output Image ========================
     private void createOutputImage() {
+        // Output image всегда фиксированного размера — сохраняем aspect ratio при рендеринге
         try (var arena = Arena.ofConfined()) {
-            int width = Math.max(1, swapChainExtent.width());
-            int height = Math.max(1, swapChainExtent.height());
             var imageInfo = VkImageCreateInfo.allocate(arena)
                     .imageType(VkImageType._2D)
                     .format(VkFormat.R8G8B8A8_UNORM)
-                    .extent(VkExtent3D.allocate(arena).width(width).height(height).depth(1))
+                    .extent(VkExtent3D.allocate(arena).width(WIDTH).height(HEIGHT).depth(1))
                     .mipLevels(1)
                     .arrayLayers(1)
                     .samples(VkSampleCountFlags._1)
@@ -1954,7 +1943,7 @@ public class Application {
         recordPushConstants(cmd, arena);
 
         deviceCommands.cmdTraceRaysKHR(cmd, raygenRegion, missRegion, hitRegion, callableRegion,
-                swapChainExtent.width(), swapChainExtent.height(), 1);
+                WIDTH, HEIGHT, 1);
     }
 
     private void recordPushConstants(VkCommandBuffer cmd, Arena arena) {
@@ -1962,8 +1951,7 @@ public class Application {
         float angleRad = (float) Math.toRadians(ROTATION_SPEED_DEG_PER_SEC * time);
         Matrix4f model = new Matrix4f().rotate(angleRad, ROTATION_AXIS);
         Matrix4f view = new Matrix4f().lookAt(CAMERA_POSITION, CAMERA_LOOK_AT, CAMERA_UP);
-        float aspectRatio = (float) swapChainExtent.width() / (float) swapChainExtent.height();
-        Matrix4f projection = new Matrix4f().perspective((float) Math.toRadians(CAMERA_FOV), aspectRatio, CAMERA_NEAR, CAMERA_FAR, true);
+        Matrix4f projection = new Matrix4f().perspective((float) Math.toRadians(CAMERA_FOV), ASPECT_RATIO, CAMERA_NEAR, CAMERA_FAR, true);
         projection.m11(-projection.m11());
 
         Matrix4f invProjection = new Matrix4f(projection).invert();
@@ -1982,24 +1970,53 @@ public class Application {
     }
 
     private void recordImageTransfers(VkCommandBuffer cmd, int imageIndex, Arena arena) {
-        // Barrier: outputImage GENERAL -> TRANSFER_SRC
+        // Barrier: outputImage GENERAL -> TRANSFER_SRC_OPTIMAL
         var transferBarrier = createImageBarrier(arena, outputImage,
                 VkImageLayout.GENERAL, VkImageLayout.TRANSFER_SRC_OPTIMAL,
                 VkAccessFlags.SHADER_WRITE, VkAccessFlags.TRANSFER_READ);
         deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.RAY_TRACING_SHADER_KHR, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, transferBarrier);
 
-        // Barrier: swapchain UNDEFINED -> TRANSFER_DST
+        // Barrier: swapchain UNDEFINED -> TRANSFER_DST_OPTIMAL
         var swapchainBarrier = createImageBarrier(arena, swapChainImages.read(imageIndex),
                 VkImageLayout.UNDEFINED, VkImageLayout.TRANSFER_DST_OPTIMAL,
                 0, VkAccessFlags.TRANSFER_WRITE);
         deviceCommands.cmdPipelineBarrier(cmd, VkPipelineStageFlags.TOP_OF_PIPE, VkPipelineStageFlags.TRANSFER, 0, 0, null, 0, null, 1, swapchainBarrier);
 
-        var copy = VkImageCopy.allocate(arena)
+        // Letterbox: сохраняем aspect ratio при копировании
+        int outWidth = Math.max(1, swapChainExtent.width());
+        int outHeight = Math.max(1, swapChainExtent.height());
+        float targetAspect = ASPECT_RATIO;
+        float windowAspect = (float) outWidth / outHeight;
+
+        int dstX0, dstY0, dstX1, dstY1;
+
+        if (windowAspect > targetAspect) {
+            // Окно шире — letterbox по горизонтали
+            int scaledWidth = (int) (outHeight * targetAspect);
+            int offsetX = (outWidth - scaledWidth) / 2;
+            dstX0 = offsetX; dstY0 = 0; dstX1 = offsetX + scaledWidth; dstY1 = outHeight;
+        } else {
+            // Окно уже — letterbox по вертикали
+            int scaledHeight = (int) (outWidth / targetAspect);
+            int offsetY = (outHeight - scaledHeight) / 2;
+            dstX0 = 0; dstY0 = offsetY; dstX1 = outWidth; dstY1 = offsetY + scaledHeight;
+        }
+
+        var blit = VkImageBlit.allocate(arena)
                 .srcSubresource(s -> s.aspectMask(VkImageAspectFlags.COLOR).layerCount(1))
+                .srcOffsets(offsets -> {
+                    offsets.at(0, o -> o.x(0).y(0).z(0));
+                    offsets.at(1, o -> o.x(WIDTH).y(HEIGHT).z(1));
+                })
                 .dstSubresource(s -> s.aspectMask(VkImageAspectFlags.COLOR).layerCount(1))
-                .extent(e -> e.width(swapChainExtent.width()).height(swapChainExtent.height()).depth(1));
-        deviceCommands.cmdCopyImage(cmd, outputImage, VkImageLayout.TRANSFER_SRC_OPTIMAL,
-                swapChainImages.read(imageIndex), VkImageLayout.TRANSFER_DST_OPTIMAL, 1, copy);
+                .dstOffsets(offsets -> {
+                    offsets.at(0, o -> o.x(dstX0).y(dstY0).z(0));
+                    offsets.at(1, o -> o.x(dstX1).y(dstY1).z(1));
+                });
+
+        deviceCommands.cmdBlitImage(cmd, outputImage, VkImageLayout.TRANSFER_SRC_OPTIMAL,
+                swapChainImages.read(imageIndex), VkImageLayout.TRANSFER_DST_OPTIMAL,
+                1, blit, VkFilter.LINEAR);
 
         // Barrier: swapchain TRANSFER_DST -> PRESENT_SRC
         var presentBarrier = createImageBarrier(arena, swapChainImages.read(imageIndex),
