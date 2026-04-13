@@ -1,6 +1,7 @@
 package tutorial.vulkan.raytracing;
 
 import club.doki7.ffm.annotation.NativeType;
+import club.doki7.ffm.ptr.IntPtr;
 import club.doki7.ffm.ptr.PointerPtr;
 import club.doki7.vma.VMA;
 import club.doki7.vma.bitmask.VmaAllocationCreateFlags;
@@ -29,7 +30,12 @@ import club.doki7.vulkan.handle.VkBuffer;
 import club.doki7.vulkan.handle.VkDevice;
 import club.doki7.vulkan.handle.VkDeviceMemory;
 import club.doki7.vulkan.handle.VkImage;
+import de.javagl.obj.ObjData;
+import de.javagl.obj.ObjReader;
+import de.javagl.obj.ObjUtils;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.Objects;
@@ -247,5 +253,141 @@ public final class VulkanUtil {
     @FunctionalInterface
     public interface FindMemoryType {
         int find(int typeBits, int properties);
+    }
+
+    // ======================== OBJ Model Loading ========================
+
+    /**
+     * Result of loading an OBJ model — vertices and indices arrays.
+     * <p>Vertex structure: vec3 position (3 floats) + vec3 color (3 floats, always white) + vec2 texCoord (2 floats).
+     * Total: 8 floats per vertex (32 bytes).</p>
+     */
+    public record ObjModelData(float[] vertices, int[] indices) {}
+
+    /**
+     * Loads an OBJ model from a resource stream and converts it to vertex/index arrays.
+     * <p>Vertices are packed as: pos(3) + color(3) + texCoord(2) = 8 floats per vertex.
+     * Color is always white (1.0, 1.0, 1.0). Texture coordinates are flipped vertically (1.0 - v).</p>
+     *
+     * @param stream input stream to the OBJ file resource
+     * @return ObjModelData containing vertices and indices arrays
+     * @throws RuntimeException if loading fails
+     */
+    public static ObjModelData loadObjModel(InputStream stream) {
+        if (stream == null) {
+            throw new RuntimeException("Failed to load model: stream is null");
+        }
+
+        try {
+            var obj = ObjReader.read(stream);
+            obj = ObjUtils.convertToRenderable(obj);
+
+            int[] indices = ObjData.getFaceVertexIndicesArray(obj);
+            var verticesArray = ObjData.getVerticesArray(obj);
+            var texCoordsArray = ObjData.getTexCoordsArray(obj, 2);
+            float[] vertices = new float[obj.getNumVertices() * 8];
+
+            for (int i = 0; i < obj.getNumVertices(); i++) {
+                // vec3 position
+                vertices[i * 8] = verticesArray[i * 3];
+                vertices[i * 8 + 1] = verticesArray[i * 3 + 1];
+                vertices[i * 8 + 2] = verticesArray[i * 3 + 2];
+                // vec3 color (white)
+                vertices[i * 8 + 3] = 1.0f;
+                vertices[i * 8 + 4] = 1.0f;
+                vertices[i * 8 + 5] = 1.0f;
+                // vec2 texCoord (V flipped)
+                vertices[i * 8 + 6] = texCoordsArray[i * 2];
+                vertices[i * 8 + 7] = 1.0f - texCoordsArray[i * 2 + 1];
+            }
+
+            return new ObjModelData(vertices, indices);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load OBJ model", e);
+        }
+    }
+
+    // ======================== Shader Compilation ========================
+
+    /**
+     * Compiles GLSL source to SPIR-V at runtime using glslangValidator.
+     * <p>Requires glslangValidator to be in PATH (Vulkan SDK).</p>
+     *
+     * @param arena    the arena for the returned IntPtr
+     * @param source   the GLSL source code string
+     * @param stage    shader stage: "rgen", "rchit", "rmiss", "vert", "frag", "comp"
+     * @param filename optional filename for error messages
+     * @return IntPtr containing SPIR-V words
+     * @throws RuntimeException if compilation fails
+     */
+    public static IntPtr compileGlslShader(
+            Arena arena, String source, String stage, String filename
+    ) {
+        java.nio.file.Path tempSpv;
+        try {
+            tempSpv = java.nio.file.Files.createTempFile("vulkan_shader_", ".spv");
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Failed to create temp file", e);
+        }
+
+        try {
+            Process process = new ProcessBuilder(
+                    "glslangValidator",
+                    "--target-env", "vulkan1.2",
+                    "--stdin", "-S", stage, "-V", "-o", tempSpv.toString()
+            ).start();
+
+            try (var out = process.getOutputStream()) {
+                out.write(source.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                String errMsg = new String(process.getErrorStream().readAllBytes());
+                throw new RuntimeException("Glslang failed (" + filename + "):\n" + errMsg);
+            }
+
+            byte[] spirvBytes = java.nio.file.Files.readAllBytes(tempSpv);
+
+            int wordCount = spirvBytes.length / Integer.BYTES;
+            int[] words = new int[wordCount];
+            java.nio.ByteBuffer.wrap(spirvBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(words);
+            var ret = club.doki7.ffm.ptr.IntPtr.allocate(arena, wordCount);
+            ret.segment().copyFrom(MemorySegment.ofArray(words));
+            return ret;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Shader compilation interrupted", e);
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Shader compilation error", e);
+        } finally {
+            try {
+                java.nio.file.Files.deleteIfExists(tempSpv);
+            } catch (java.io.IOException ignored) {
+            }
+        }
+    }
+
+    /**
+     * Loads a shader resource and compiles it to SPIR-V.
+     *
+     * @param arena    the arena for the returned IntPtr
+     * @param clazz    the class to load the resource from
+     * @param filename resource path (e.g. "/shader/raytracing/ch20/ray.rgen")
+     * @param stage    shader stage: "rgen", "rchit", "rmiss", "vert", "frag", "comp"
+     * @return IntPtr containing SPIR-V words
+     * @throws RuntimeException if loading or compilation fails
+     */
+    public static IntPtr compileShaderFromClass(
+            Arena arena, Class<?> clazz, String filename, String stage
+    ) {
+        String path = filename.startsWith("/") ? filename : "/" + filename;
+        try (var stream = clazz.getResourceAsStream(path)) {
+            if (stream == null) throw new RuntimeException("Shader not found: " + filename);
+            String source = new String(stream.readAllBytes());
+            return compileGlslShader(arena, source, stage, filename);
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Failed to load shader: " + filename, e);
+        }
     }
 }

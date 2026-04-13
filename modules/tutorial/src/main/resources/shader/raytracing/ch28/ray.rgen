@@ -1,0 +1,60 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+struct RayPayload {
+    vec3 color;
+    vec2 texCoord;
+};
+
+layout(location = 0) rayPayloadEXT RayPayload payload;
+layout(binding = 0, set = 0, rgba8) uniform image2D resultImage;
+layout(binding = 1, set = 0) uniform accelerationStructureEXT tlas;
+layout(binding = 2, set = 0) uniform sampler2D texSampler;
+
+layout(push_constant) uniform Constants {
+    mat4 model;
+    mat4 inverseProjection;
+    mat4 inverseView;
+    mat4 inverseModel;
+} constants;
+
+void main() {
+    // Normalize pixel coordinates to [-1, 1]
+    vec2 pixelCoord = (vec2(gl_LaunchIDEXT.xy) / vec2(gl_LaunchSizeEXT.xy)) * 2.0 - 1.0;
+
+    // Clip space coordinates (near plane in Vulkan NDC: z=-1, w=1)
+    vec4 clipSpace = vec4(pixelCoord, -1.0, 1.0);
+
+    // Transform to view space using inverse projection
+    vec4 rayDirView4 = constants.inverseProjection * clipSpace;
+    vec3 rayDirView = normalize(rayDirView4.xyz);
+
+    // Extract camera position from inverse view matrix (4th column)
+    vec3 rayOrigin = constants.inverseView[3].xyz;
+
+    // Transform ray direction to world space
+    vec3 rayDirection = normalize((constants.inverseView * vec4(rayDirView, 0.0)).xyz);
+
+    // Transform ray into model (object) space using precomputed inverse model matrix
+    rayOrigin = (constants.inverseModel * vec4(rayOrigin, 1.0)).xyz;
+    rayDirection = normalize((constants.inverseModel * vec4(rayDirection, 0.0)).xyz);
+
+    payload.color = vec3(0.0, 0.0, 0.0); // Default background
+    payload.texCoord = vec2(0.0);
+
+    traceRayEXT(
+        tlas,
+        gl_RayFlagsOpaqueEXT,
+        0xFF,
+        0,
+        0,
+        0,
+        rayOrigin,
+        0.0,
+        rayDirection,
+        1000.0,
+        0
+    );
+
+    imageStore(resultImage, ivec2(gl_LaunchIDEXT.xy), vec4(payload.color, 1.0));
+}
